@@ -1,0 +1,757 @@
+---
+title: "Extended data figure 9"
+author: "Marc J Williams"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: kable
+    number_sections: yes
+    toc: no
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.height = 5)
+```
+
+## Setup
+
+Load data, make some plots and identify the clone that is most similar to the cfDNA WGS read count and BAF data.
+
+```{r}
+library(here)
+source(here("src/setup.R"))
+purity %>% filter(sample  %in% config$patient_wgs)
+clonecols <- config$clonecols
+names(clonecols) <- LETTERS[1:length(clonecols)]
+
+correct_copy <- function(n, c, p){
+  top <- 2 * n + (1 - n) * c
+  bottom <- 2 * n + (1 - n) * p
+  return(top / bottom)
+}
+
+inverse_correct_copy <- function(n, c, p){
+  top <- c * (2 * n + (1 - n) * p) - 2 * n
+  bottom <- 1 - n
+  return(top / bottom)
+}
+
+predicted_copy_sample <- function(cn, clone_freq, purity_sample,
+                                  permute_clones = F, sample_frequencies = F, sample_copy = F){
+  
+  clone_freq_new <- clone_freq
+  if (permute_clones == T){
+    clone_freq_new$clone_id <- sample(clone_freq_new$clone_id)
+  }
+  
+  if (sample_frequencies == T){
+    values <- rexp(nrow(clone_freq), rate=1)
+    normalized_values <- values / sum(values)
+    clone_freq_new$cloneVAF <- normalized_values
+  }
+  
+  cn_dat_corr <- cn %>% 
+    left_join(clone_freq_new) %>% 
+    mutate(copy = cloneVAF * copy, state = cloneVAF * state) %>% 
+    group_by(chr, start, end) %>% 
+    summarise(copy = sum(copy, na.rm = T), state = round(sum(state, na.rm = T))) %>% 
+    ungroup() %>% 
+    mutate(cell_id = "x") %>% 
+    mutate(state = 2)
+  
+  if (sample_copy){
+    cn_dat_corr$copy <- sample(cn_dat_corr$copy)
+  }
+  
+  cn_dat_corr$copy <- correct_copy(n = 1 - purity_sample$purity, 
+                                   c = cn_dat_corr$copy, 
+                                   p = mean(cn_dat_corr$copy))
+  
+  return(cn_dat_corr)
+}
+
+compute_error <- function(cn_dat_corr, qdnaseq, mytimepoint){
+  datplot1 <- cn_dat_corr
+  datplot2 <- qdnaseq %>% 
+    filter(timepoint == mytimepoint - 1) %>% 
+    mutate(cell_id = "x") %>% 
+    mutate(state = 2)
+    
+  err <- left_join(datplot1 %>% select(chr, start, end, copy), 
+            datplot2 %>% select(chr, start, end, copy), 
+            by = c("chr", "start", "end"), 
+            suffix = c(".dlp", ".wgs")) %>% 
+    mutate(x = sqrt(copy.dlp^2 - copy.wgs^2)) %>% 
+    pull(x) %>% 
+    mean(., na.rm = T)
+  return(err)
+}
+
+most_similar_clone <- function(mysample, mytimepoint, dlp = "10kb"){
+  
+  sample_id <- purity %>% 
+    filter(str_detect(patient, mysample)) %>% 
+    filter(timepoint == mytimepoint) %>% 
+    pull(sample)
+  
+  cn <- read_allfiles("copynumber_10kb.csv", patients = mysample) %>% 
+    filter(mappability > 0.99) %>% 
+    mutate(cell_id = clone_id) %>% 
+    filter(cell_id != "0")
+  
+  qdnaseq <- fread(glue::glue(paste0(config$root, "/cfdna_wgs/cnv/SPECTRUM-OV-{mysample}/{sample_id}/bins_500000.qdnaseq.cnv"))) %>% 
+      rename(chr = chromosome) %>% 
+      filter(chr != "Y") %>% 
+      filter(mappability > 0.75) %>% 
+      filter(blacklist == 0) %>% 
+      mutate(copy = 2^log2_ratio)
+  
+  binsize <- qdnaseq$end[1] - qdnaseq$start[1] + 1
+  
+  cn <- cn %>% mutate(start = round(start / binsize) * binsize + 1, end = start + binsize - 1) %>% 
+    group_by(clone_id, cell_id, chr, start, end) %>% 
+    summarise(copy = mean(copy, na.rm = T), 
+              state = round(mean(state, na.rm = T))) %>% 
+    ungroup()
+  
+  x <- inner_join(cn, qdnaseq, by = c("chr", "start", "end"), suffix = c(".dlp", ".cfdna")) %>% 
+    group_by(clone_id) %>% 
+    summarise(cor_p = cor(copy.dlp, copy.cfdna, use = "complete.obs"),
+              cor_s = cor(copy.dlp, copy.cfdna, use = "complete.obs", method = "spearman")) %>% 
+    ungroup() %>% 
+    mutate(patient = mysample, timepoint = mytimepoint)
+  return(x)
+}
+
+most_similar_clone_baf <- function(mysample, mytimepoint, dlp = "10kb"){
+  
+  sample_id <- purity %>% 
+    filter(str_detect(patient, mysample)) %>% 
+    filter(timepoint == mytimepoint) %>% 
+    pull(sample)
+  
+  cn <- read_allfiles("hscn.csv.gz", patients = mysample)
+  clones <- read_allfiles("clones.csv", patients = mysample)
+  cn_clone <- consensuscopynumber(cn, clones) %>% mutate(clone_id = cell_id)
+  
+  qdnaseq <- fread(glue::glue(paste0(config$root, "/cfdna_wgs/cnv/SPECTRUM-OV-{mysample}/{sample_id}/bins_500000.qdnaseq.cnv"))) %>% 
+      rename(chr = chromosome) %>% 
+      filter(chr != "Y") %>% 
+      filter(mappability > 0.75) %>% 
+      filter(blacklist == 0) %>% 
+      mutate(copy = 2^log2_ratio)
+  
+  baf <- fread(glue::glue(paste0(config$root, "/cfdna_wgs/baf/SPECTRUM-OV-{mysample}/{sample_id}/bins_500000.baf"))) %>% 
+    rename(chr = chromosome) %>% 
+    filter(chr != "Y")
+  
+  cfdna_wgs <- inner_join(qdnaseq, baf)
+  
+  binsize <- qdnaseq$end[1] - qdnaseq$start[1] + 1
+  
+  x <- inner_join(cn_clone, cfdna_wgs, by = c("chr", "start", "end"), suffix = c(".dlp", ".cfdna")) %>% 
+    group_by(clone_id) %>% 
+    summarise(corcopy_p = cor(copy.dlp, copy.cfdna, use = "complete.obs"),
+              corcopy_s = cor(copy.dlp, copy.cfdna, use = "complete.obs", method = "spearman"),
+              corbaf_p = cor(BAF, baf, use = "complete.obs"),
+              corbaf_s = cor(BAF, baf, use = "complete.obs", method = "spearman")) %>% 
+    ungroup() %>% 
+    mutate(cor_p = corcopy_p + corbaf_p,
+           cor_s = corcopy_s + corbaf_s) %>% 
+    mutate(patient = mysample, timepoint = mytimepoint)
+  return(x)
+}
+
+compute_error_df <- function(mysample, mytimepoint, dlp = "10kb", samples = 10){
+  
+  cn <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+    filter(mappability > 0.99) %>% 
+    mutate(cell_id = clone_id) %>% 
+    filter(cell_id != "0")
+  
+  qdnaseq <- fread(glue::glue(paste0(config$root, "/cfdna_wgs/cnv/SPECTRUM-OV-{mysample}/{sample_id}/bins_500000.qdnaseq.cnv"))) %>% 
+      rename(chr = chromosome) %>% 
+      filter(chr != "Y") %>% 
+      filter(mappability > 0.75) %>% 
+      filter(blacklist == 0) %>% 
+      mutate(copy = 2^log2_ratio)
+  
+  binsize <- qdnaseq$end[1] - qdnaseq$start[1] + 1
+  
+  cn <- cn %>% mutate(start = round(start / binsize) * binsize + 1, end = start + binsize - 1) %>% 
+    group_by(clone_id, cell_id, chr, start, end) %>% 
+    summarise(copy = mean(copy, na.rm = T), 
+              state = round(mean(state, na.rm = T))) %>% 
+    ungroup()
+  
+  purity_sample <- purity %>% filter(str_detect(patient, mysample) & T == mytimepoint)
+  
+  clone_freq <- svdf_clone %>% filter(str_detect(patient, mysample) & T == mytimepoint) %>% 
+    filter(nclones == 1) %>% 
+    select(clone_id, cloneVAF) %>% 
+    mutate(cloneVAF = cloneVAF / sum(cloneVAF))
+  
+  cn_dat_corr <- predicted_copy_sample(cn, clone_freq, purity_sample = purity_sample, permute_clones = F, sample_frequencies = F)
+  err1 <- compute_error(cn_dat_corr = cn_dat_corr, qdnaseq = qdnaseq, mytimepoint = mytimepoint)
+  
+  df <- data.frame(error = err1, type = "correct", idx = 1)
+  
+  for (i in 1:samples){
+    cn_dat_corr <- predicted_copy_sample(cn, clone_freq, purity_sample = purity_sample, permute_clones = T, sample_frequencies = F)
+    err1 <- compute_error(cn_dat_corr = cn_dat_corr, qdnaseq = qdnaseq, mytimepoint = mytimepoint)
+    df <- bind_rows(df, data.frame(error = err1, type = "permute", idx = i))
+  }
+  
+  for (i in 1:samples){
+    cn_dat_corr <- predicted_copy_sample(cn, clone_freq, purity_sample = purity_sample, permute_clones = F, sample_frequencies = T)
+    err1 <- compute_error(cn_dat_corr = cn_dat_corr, qdnaseq = qdnaseq, mytimepoint = mytimepoint)
+    df <- bind_rows(df, data.frame(error = err1, type = "sample", idx = i))
+  }
+  
+  for (i in 1:samples){
+    cn_dat_corr <- predicted_copy_sample(cn, clone_freq, purity_sample = purity_sample, permute_clones = F, sample_frequencies = F, sample_copy = T)
+    err1 <- compute_error(cn_dat_corr = cn_dat_corr, qdnaseq = qdnaseq, mytimepoint = mytimepoint)
+    df <- bind_rows(df, data.frame(error = err1, type = "sample_copy", idx = i))
+  }
+  
+  df$sample <- mysample
+  df$timepoint <- mytimepoint
+  return(df)
+}
+
+
+plot_prediction <- function(mysample, 
+                            mytimepoint, 
+                            dlp = "10kb", 
+                            purity_val = NULL,
+                            ploidy = NULL, 
+                            raster = TRUE,
+                            mypointsize = 0.05,
+                            use_qdnaseq = TRUE,
+                            ylims = c(0.5, 1.5), 
+                            ybreaks = c(0.5,1, 1.5)){
+  
+  
+  sample_id <- purity %>% 
+    filter(str_detect(patient, mysample)) %>% 
+    filter(timepoint == mytimepoint) %>% 
+    pull(sample)
+  
+  if (dlp == "10kb"){
+    cn <- read_allfiles("copynumber_10kb.csv", patients = mysample) %>%
+      filter(mappability > 0.99) %>% 
+      mutate(cell_id = clone_id) %>% 
+      filter(cell_id != "0")
+  } else{
+  
+    clones <- read_allfiles("clones.csv", patients = mysample)
+    cn <- read_allfiles("hscn.csv.gz", patients = mysample)
+    cn <- consensuscopynumber(cn, clones)  
+    cn$clone_id <- cn$cell_id
+  }
+  
+  qdnaseq <- fread(glue::glue(paste0(config$root, "/cfdna_wgs/cnv/SPECTRUM-OV-{mysample}/{sample_id}/bins_500000.qdnaseq.cnv"))) %>% 
+    rename(chr = chromosome) %>% 
+    filter(chr != "Y") %>% 
+    filter(mappability > 0.75) %>% 
+    filter(blacklist == 0) %>% 
+    mutate(copy = 2^log2_ratio)
+  binsize <- qdnaseq$end[1] - qdnaseq$start[1] + 1
+  
+  cn <- cn %>% mutate(start = round(start / binsize) * binsize + 1, end = start + binsize - 1) %>% 
+    group_by(clone_id, cell_id, chr, start, end) %>% 
+    summarise(copy = mean(copy, na.rm = T), 
+              state = round(mean(state, na.rm = T))) %>% 
+    ungroup()
+  
+  clone_freq <- svdf_clone %>% filter(str_detect(patient, mysample) & timepoint == mytimepoint) %>% 
+    filter(nclones == 1) %>% 
+    select(clone_id, clone_frequency) %>% 
+    mutate(clone_frequency = clone_frequency / sum(clone_frequency))
+  
+  if (is.null(purity_val)){
+    purity_sample <- purity %>% filter(str_detect(patient, mysample) & timepoint == mytimepoint)
+    print(purity_sample %>% select(patient, sample, starts_with("tumor")))
+    purity_sample <- purity_sample$tumorfraction_ClonalSV
+  } else {
+    purity_sample <- purity_val
+  }
+  
+  cn_dat_corr <- cn %>% 
+    left_join(clone_freq) %>% 
+    mutate(copy = clone_frequency * copy, state = clone_frequency* state) %>% 
+    group_by(chr, start, end) %>% 
+    summarise(copy = sum(copy, na.rm = T), state = round(sum(state, na.rm = T))) %>% 
+    ungroup() %>% 
+    mutate(cell_id = "x") %>% 
+    mutate(state = 2)
+  if (is.null(ploidy)){
+    ploidy <- mean(cn_dat_corr %>% 
+                     #filter(chr!="X") %>% 
+                     pull(copy))
+  }
+  normal_frac <- 1 - purity_sample
+  
+  cn_dat_corr$copy <- correct_copy(n = 1 - purity_sample, c = cn_dat_corr$copy, p = ploidy)
+  
+  datplot1 <- cn_dat_corr
+  datplot2 <- qdnaseq %>% 
+    mutate(cell_id = "x") %>% 
+    mutate(state = 2)
+  
+  g3 <- left_join(datplot1 %>% select(chr, start, end, copy), 
+            datplot2 %>% select(chr, start, end, copy), 
+            by = c("chr", "start", "end"), 
+            suffix = c(".dlp", ".wgs")) %>% 
+    mutate(copy = copy.dlp / copy.wgs) %>% 
+    mutate(state = 2) %>% 
+    mutate(cell_id = "x") %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), 
+                    alpha = 0.3, pointsize = mypointsize, cellid = "x") + ylab('Ratio\nDLP/WGS') +
+      theme(legend.position = "none") +
+      scale_y_continuous(breaks = ybreaks, limits = ylims)+
+      geom_hline(yintercept = 1.0, lty = 1, col = "firebrick3", alpha = 0.9) +
+    ggtitle("Predicted / WGS")
+  
+  g1 <- plotCNprofile(datplot1, overwrite_color = c("2" = "black"), raster = raster,
+                    alpha = 0.3, pointsize =mypointsize, cellid = "x") + ylab('CN') +
+      theme(legend.position = "none") +
+      ylab("Normalized\nRead Counts") +
+      scale_y_continuous(breaks = ybreaks, limits = ylims)+
+      geom_hline(yintercept = 1.0, lty = 1, col = "firebrick3", alpha = 0.9) +
+    ggtitle("Predicted CN from DLP")
+  
+  g2 <- datplot2 %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"),raster = raster,
+                    alpha = 0.3, pointsize = mypointsize, cellid = "x") + ylab('CN') +
+      theme(legend.position = "none") +
+      ylab("Normalized\nRead Counts") +
+      scale_y_continuous(breaks = ybreaks, limits = ylims)+
+      geom_hline(yintercept = 1.0, lty = 1, col = "firebrick3", alpha = 0.9) +
+    ggtitle("cfDNA WGS")
+  
+  gcfdna <- datplot2 %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), raster = raster,
+                    alpha = 0.3, pointsize =mypointsize, cellid = "x") + ylab('CN') +
+      theme(legend.position = "none") +
+      ylab("Normalized\nRead Counts") +
+      scale_y_continuous(breaks = ybreaks, limits = ylims)+
+      #geom_hline(yintercept = 1.0, lty = 1, col = "firebrick3", alpha = 0.9) +
+      #ggtitle("cfDNA WGS") +
+    NULL
+  
+  pl <- signals:::plottinglist(datplot1)
+  pl$CNbins <- pl$CNbins %>% mutate(idx2 = idx + 10) %>% 
+    mutate(copy = ifelse(copy > max(ylims), max(ylims), copy)) %>% 
+    mutate(copy = ifelse(copy < min(ylims), min(ylims), copy))
+  
+  gcfdna_dlp <- datplot2 %>% 
+    mutate(copy = ifelse(copy > max(ylims), max(ylims), copy)) %>% 
+    mutate(copy = ifelse(copy < min(ylims), min(ylims), copy)) %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), raster = raster,
+                    alpha = 0.3, pointsize = mypointsize, cellid = "x", line_size = 0.25, font_size = 7) + ylab('CN') +
+      theme(legend.position = "none") +
+      scale_y_continuous(breaks = ybreaks, limits = ylims)+
+      #geom_hline(yintercept = 1.0, lty = 1, col = "firebrick3", alpha = 0.9) +
+    #ggtitle("cfDNA WGS") +
+    #geom_point(data = pl$CNbins, col = "firebrick4") +
+    ylab("Normalized\nRead Counts") +
+    geom_segment(data = pl$CNbins,inherit.aes = FALSE,
+                 aes(x = idx, xend = idx2, y = copy, yend = copy),
+                 alpha = 0.5, col = "firebrick3", fill = "firebrick3")
+  
+  gcfdna_dlp_window <- datplot2 %>% 
+    select(chr, start, end, copy, state, cell_id) %>% 
+    na.omit() %>% 
+    group_by(chr) %>% 
+    mutate(copy = slider::slide_vec(copy, mean, .before = 5)) %>% 
+    ungroup() %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), 
+                    alpha = 0.3, pointsize =mypointsize, cellid = "x") + ylab('CN') +
+      theme(legend.position = "none") +
+      scale_y_continuous(breaks = ybreaks, limits = ylims)+
+    ylab("Normalized\nRead Counts") +
+    geom_segment(data = pl$CNbins,inherit.aes = FALSE,
+                 aes(x = idx, xend = idx2, y = copy, yend = copy),
+                 alpha = 1.0, col = "firebrick3", fill = "firebrick3")
+  
+  joint_df <- inner_join(datplot2 %>% select(chr, start, end, copy),
+             pl$CNbins %>% select(chr, start, end, copy),
+             by = c("chr", "start", "end"),
+             suffix = c(".data", ".prediction"))
+  
+  correlation <- cor(joint_df$copy.data, joint_df$copy.prediction)
+  
+  myplot <- plot_grid(g1, g2, g3, ncol = 1, axis = "lrtb", align = "hv")
+  
+  df_similar <- most_similar_clone(mysample, mytimepoint)
+  df_similar_baf <- most_similar_clone_baf(mysample, mytimepoint)
+  
+  return(list(myplot = myplot, gratio = g3, gcfdna = gcfdna, gcfdna_dlp_window = gcfdna_dlp_window, gcfdna_dlp = gcfdna_dlp,  ploidy = ploidy, normal_frac = normal_frac, joint_df = joint_df, cor = correlation, qdnaseq = qdnaseq, df_similar = df_similar, df_similar_baf = df_similar_baf))
+}
+
+```
+
+## Plot predictions
+
+```{r}
+data_list <- list()
+data_list[["045_T1"]] <- plot_prediction("045", 1, raster = T)
+data_list[["045_T7"]] <- plot_prediction("045", 7, raster = T, ylims = c(0.8, 1.2), ybreaks = c(0.8, 1.0, 1.2))
+
+data_list[["107_T1"]] <- plot_prediction("107", 1, ylims = c(0.8, 1.2), ybreaks = c(0.8, 1.0, 1.2))
+data_list[["107_T5"]] <- plot_prediction("107", 5, ylims = c(0.8, 1.2), ybreaks = c(0.8, 1.0, 1.2))
+
+data_list[["081_T1"]] <- plot_prediction("081", 1, ylims = c(0.9, 1.1), ybreaks = c(0.9, 1.0, 1.1))
+data_list[["081_T4"]] <- plot_prediction("081", 4, ylims = c(0.9, 1.1), ybreaks = c(0.9, 1.0, 1.1))
+
+data_list[["044_T1"]] <- plot_prediction("044", 1)
+data_list[["044_T7"]] <- plot_prediction("044", 7, ylims = c(0.8, 1.2), ybreaks = c(0.8, 1.0, 1.2))
+
+data_list[["009_T1"]] <- plot_prediction("009", 1)
+data_list[["009_T13"]] <- plot_prediction("009", 13, ylims = c(0.9, 1.1), ybreaks = c(0.9, 1.0, 1.1))
+
+data_list[["022_T1"]] <- plot_prediction("022", 1, ylims = c(0.9, 1.1), ybreaks = c(0.9, 1.0, 1.1))
+data_list[["022_T7"]] <- plot_prediction("022", 7, ylims = c(0.65, 1.35), ybreaks = c(0.7, 1.0, 1.3))
+
+ggplot_to_add <- removexaxis + ylab("")
+ggplot_to_add2 <- theme_cowplot(font_size = 7, line_size = 0.25) + theme(legend.position = "none")
+
+g_predictions <- plot_grid(data_list[["045_T1"]]$gcfdna_dlp + ggplot_to_add + ylab(""), data_list[["045_T7"]]$gcfdna_dlp + ggplot_to_add + ylab(""),
+          data_list[["107_T1"]]$gcfdna_dlp + ggplot_to_add + ylab(""), data_list[["107_T5"]]$gcfdna_dlp + ggplot_to_add + ylab(""),
+          data_list[["081_T1"]]$gcfdna_dlp + ggplot_to_add + ylab(""), data_list[["081_T4"]]$gcfdna_dlp + ggplot_to_add + ylab(""),
+          data_list[["044_T1"]]$gcfdna_dlp + ggplot_to_add + ylab(""), data_list[["044_T7"]]$gcfdna_dlp + ggplot_to_add + ylab(""),
+          data_list[["009_T1"]]$gcfdna_dlp + ggplot_to_add + ylab(""), data_list[["009_T13"]]$gcfdna_dlp + ggplot_to_add + ylab(""),
+          data_list[["022_T1"]]$gcfdna_dlp + ggplot_to_add2 + ylab(""), data_list[["022_T7"]]$gcfdna_dlp + ggplot_to_add2 + ylab(""), ncol = 2, rel_heights = c(1,1,1,1,1,1.3), axis = "lr", align = "v")
+
+```
+
+## Identify most similar clone
+
+
+```{r}
+df <- rbindlist(lapply(data_list, function(x) x$df_similar)) %>% 
+  left_join(svdf_clone %>% select(patient, timepoint, clone_frequency_normalized, clone_id) %>% mutate(patient = str_remove(patient, "SPECTRUM-OV-"))) %>% 
+  na.omit() %>% 
+  replace_na(list(clone_frequency_normalized = 0))
+
+dfbaf <- rbindlist(lapply(data_list, function(x) x$df_similar_baf)) %>% 
+  left_join(svdf_clone %>% select(patient, timepoint, clone_frequency_normalized, clone_id) %>% mutate(patient = str_remove(patient, "SPECTRUM-OV-"))) %>% 
+  na.omit() %>% 
+  replace_na(list(clone_frequency_normalized = 0)) %>% 
+  filter(clone_id != "0")
+
+
+g1 <- df %>% 
+  mutate(x = paste0(patient, "-", timepoint)) %>% 
+  ggplot(aes(x = clone_id, y = cor_p, fill = clone_id)) +
+  geom_col() +
+  scale_fill_manual(values =clonecols) +
+  facet_wrap(~x, scales = "free", nrow = 1)
+
+g1a <- dfbaf %>% 
+  mutate(x = paste0(patient, "-", timepoint)) %>% 
+  ggplot(aes(x = clone_id, y = cor_p, fill = clone_id)) +
+  geom_col() +
+  scale_fill_manual(values =clonecols) +
+  facet_wrap(~x, scales = "free", nrow = 1)
+
+g1b <- dfbaf %>% 
+  mutate(x = paste0(patient, "-", timepoint)) %>% 
+  ggplot(aes(x = clone_id, y = corcopy_p, fill = clone_id)) +
+  geom_col() +
+  scale_fill_manual(values =clonecols) +
+  facet_wrap(~x, scales = "free", nrow = 1)
+
+g1c <- dfbaf %>% 
+  mutate(x = paste0(patient, "-", timepoint)) %>% 
+  ggplot(aes(x = clone_id, y = corbaf_p, fill = clone_id)) +
+  geom_col() +
+  scale_fill_manual(values =clonecols) +
+  facet_wrap(~x, scales = "free", nrow = 1)
+
+g1 <- df %>% 
+  mutate(x = paste0(patient, "-", timepoint)) %>% 
+  ggplot(aes(x = clone_id, y = clone_frequency_normalized, fill = clone_id)) +
+  geom_col() +
+  scale_fill_manual(values =clonecols) +
+  facet_wrap(~x, scales = "free", nrow = 1) +
+  scale_y_continuous(breaks = c(0, 0.5, 1), limits = c(0, 1)) +
+  #facet_grid(~x, scales = "free", space = "free") +
+  ylab("Clone frequency") +
+  theme_cowplot(font_size = 7, line_size = 0.25) +
+  theme(legend.position = "none")
+
+g2 <- dfbaf %>% 
+  mutate(x = paste0(patient, "-", timepoint)) %>% 
+  ggplot(aes(x = clone_id, y = cor_p, fill = clone_id)) +
+  geom_col() +
+  scale_fill_manual(values =clonecols) +
+  facet_wrap(~x, scales = "free", nrow = 1) +
+  #facet_grid(~x, scales = "free", space = "free") +
+  xlab("Clone") +
+  ylab("Cor. (copy + BAF)") +
+  theme_cowplot(font_size = 7, line_size = 0.25) +
+  theme(legend.position = "none")
+
+gcorr <- plot_grid(g1 +theme(strip.background = element_blank(), strip.placement = "outside") + removexaxis, 
+          g2 + theme(strip.text = element_blank()), ncol = 1, rel_heights = c(0.5, 1), align = "v", axis = "l")
+```
+
+
+```{r}
+inner_join(dfbaf %>% 
+  group_by(patient, timepoint) %>% 
+  filter(clone_frequency_normalized == max(clone_frequency_normalized)) %>% 
+  ungroup() %>% 
+  select(patient, timepoint, clone_id, clone_frequency_normalized) %>% 
+  rename(max_clone_freq = clone_id),
+  dfbaf %>% 
+  group_by(patient, timepoint) %>% 
+  filter(cor_p == max(cor_p)) %>% 
+  ungroup() %>% 
+  select(patient, timepoint, clone_id) %>% 
+  rename(max_clone_corr = clone_id))
+  
+
+```
+
+```{r}
+inner_join(dfbaf %>% 
+  group_by(patient, timepoint) %>% 
+  filter(clone_frequency_normalized == max(clone_frequency_normalized)) %>% 
+  ungroup() %>% 
+  select(patient, timepoint, clone_id, clone_frequency_normalized) %>% 
+  rename(max_clone_freq = clone_id),
+  dfbaf %>% 
+  group_by(patient, timepoint) %>% 
+  filter(cor_p == max(cor_p)) %>% 
+  ungroup() %>% 
+  select(patient, timepoint, clone_id) %>% 
+  rename(max_clone_corr = clone_id)) %>% 
+  summarize(sum(max_clone_corr == max_clone_freq))
+  
+
+```
+
+```{r}
+purity %>% filter(sample  %in% config$patient_wgs) %>% 
+  select(patient, sample, timepoint, tumorfraction_TP53, tumorfraction_ClonalSV) %>% 
+  DT::datatable()
+  
+```
+
+## Compare frequencies between SVs and SNVs
+
+
+```{r}
+snvdf_clone <- readxl::read_xlsx(config$tables, sheet = "S4 - Clone frequencies (SNVs)") %>% 
+  mutate(nclones = 1) %>% 
+  left_join(purity %>% select(patient, timepoint, tumorfraction_ClonalSV)) %>% 
+  group_by(patient, timepoint) %>% 
+  mutate(max_clone_frequency = max(clone_frequency)) %>% 
+  ungroup() %>% 
+  left_join(recurrence %>% filter(recurrence_number == 1) %>% rename(patient = patient_id, recurrence_date = date))
+
+df1 <- svdf_clone %>% 
+  select(patient, clone_id, clone_frequency, nclones, timepoint, days, nSV_total, nSV_detected) %>% 
+  mutate(type = "SV")
+df2 <- snvdf_clone %>% 
+  select(patient, clone_id, clone_frequency, nclones, timepoint, days, nSNV_total, nSNV_detected) %>% 
+  mutate(type = "SNV")
+
+sv_snv <- inner_join(df1, df2, by = c("patient", "clone_id", "nclones", "timepoint", "days"), suffix = c(".SV", ".SNV")) %>% 
+  select(patient, timepoint, clone_id, clone_frequency.SV, clone_frequency.SNV, everything()) %>% 
+  left_join(purity %>% select(patient, timepoint, tumorfraction_TP53)) %>% 
+  arrange(patient, clone_id, T)
+
+```
+
+### All patients
+
+We'll compare all patients that have sufficient numbers of SNVs.
+
+```{r}
+
+mycols <- c("dodgerblue2", "#E31A1C", "green4", "#6A3D9A", "#FF7F00", "gold1", "skyblue2", "palegreen2", "#FDBF6F", "gray70", "maroon", "orchid1", "darkorange4", "brown", "black")
+
+gcompare <- sv_snv %>% 
+  filter(!str_detect(patient, "068")) %>% #no snvs
+  filter(nclones == 1) %>% 
+  filter(tumorfraction_TP53 > 0.005) %>% 
+  filter(nSV_total > 4 & nSNV_total> 4) %>% 
+  mutate(patient = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  ggplot(aes(x = clone_frequency.SNV, y = clone_frequency.SV)) +
+  geom_point(aes(col = patient), size = 0.7, alpha = 0.5) +
+  logyscale() +
+  logxscale() +
+  ggpubr::stat_cor(size = 2) +
+  geom_abline(lty = 2) +
+  xlab("Clone frequency (SNVs)") +
+  ylab("Clone frequency (SVs)") +
+  scale_color_manual(values = mycols) +
+  labs(col = "")
+
+gcompare
+```
+
+### Example: OV-045
+
+```{r}
+
+g045_sv <- sv_snv %>% 
+  filter(str_detect(patient, "045")) %>% 
+  filter(nclones == 1) %>% 
+  ggplot(aes(x = days, y = clone_frequency.SV, fill = clone_id, col = clone_id)) +
+  geom_line() +
+  geom_point() +
+  logyscale()  +
+  scale_fill_manual(values = clonecols) +
+  scale_color_manual(values = clonecols) +
+  ylab("OV-045 clone frequency (SVs)") +
+  labs(fill = "Clone", col = "Clone") +
+  scale_x_continuous(breaks = scales::breaks_width(365)) +
+  xlab("Time from first surgery (days)")
+
+g045_snv <- sv_snv %>% 
+  filter(str_detect(patient, "045")) %>% 
+  filter(nclones == 1) %>% 
+  ggplot(aes(x = days, y = clone_frequency.SNV, fill = clone_id, col = clone_id)) +
+  geom_line() +
+  geom_point() +
+  logyscale() +
+  scale_fill_manual(values = clonecols) +
+  scale_color_manual(values = clonecols) +
+  ylab("OV-045 clone frequency (SNVs)") +
+  labs(fill = "Clone", col = "Clone") +
+  scale_x_continuous(breaks = scales::breaks_width(365)) +
+  xlab("Time from first surgery (days)")
+
+plot_grid(g045_sv, g045_snv)
+```
+
+## Final figure
+
+```{r, fig.width = 7, fig.height = 8}
+
+gbottom <- plot_grid(g045_sv + theme(legend.position = "none"), 
+          g045_snv, 
+          gcompare, ncol = 3,
+          rel_widths = c(1, 1.2, 1.5),
+          labels = c("c", "d", "e"), label_size = 8,
+          align = "h", axis = "tb") 
+
+plot_grid(gcorr, 
+          NULL,
+          g_predictions,
+          NULL,
+          gbottom,
+          ncol = 1, 
+          labels = c("a", "", "b"),
+          label_size = 8,
+          rel_heights = c(1, 0.1, 1.5, 0.1,1)) %>% 
+  save_plot(here("Figures/EDF9_validate_frequencies.pdf"), 
+          ., base_width = 2 * 89 * 0.039, base_height = 8)
+
+
+plot_grid(gcorr, 
+          NULL,
+          g_predictions,
+          NULL,
+          gbottom,
+          ncol = 1, 
+          labels = c("a", "", "b"),
+          label_size = 8,
+          rel_heights = c(1, 0.1, 1.5, 0.1,1))
+```
+
+
+## 022
+
+Here we'll identify some cells within clone A of OV-022 that resemble the signal we get from the WGS data. In particular there are a small group of cells that have losses on chromosomes 5 and 9 that likely constitute the recurrence clone.
+
+```{r}
+mysample <- "022"
+cn <- read_allfiles("hscn.csv.gz", patients = mysample)
+clones <- read_allfiles("clones.csv", patients = mysample)
+cn_clone <- consensuscopynumber(cn, clones) %>% mutate(clone_id = cell_id)
+
+qdnaseq <- fread(glue::glue(config$root, "/cfdna_wgs/cnv/SPECTRUM-OV-022/SPECTRUM-OV-022_21-211-04258_8048305213/bins_500000.qdnaseq.cnv")) %>% 
+    rename(chr = chromosome) %>% 
+    filter(chr != "Y") %>% 
+    filter(mappability > 0.75) %>% 
+    filter(blacklist == 0) %>% 
+    mutate(copy = 2^log2_ratio)
+
+baf <- fread(glue::glue(config$root, "/cfdna_wgs/baf/SPECTRUM-OV-022/SPECTRUM-OV-022_21-211-04258_8048305213/bins_500000.baf")) %>% 
+  rename(chr = chromosome) %>% 
+  filter(chr != "Y")
+
+cfdna_wgs <- inner_join(qdnaseq, baf)
+
+binsize <- qdnaseq$end[1] - qdnaseq$start[1] + 1
+
+x <- inner_join(cn, cfdna_wgs, by = c("chr", "start", "end"), suffix = c(".dlp", ".cfdna")) %>% 
+  group_by(cell_id) %>% 
+  summarise(corcopy_p = cor(copy.dlp, copy.cfdna, use = "complete.obs"),
+            corcopy_s = cor(copy.dlp, copy.cfdna, use = "complete.obs", method = "spearman"),
+            corbaf_p = cor(BAF, baf, use = "complete.obs"),
+            corbaf_s = cor(BAF, baf, use = "complete.obs", method = "spearman")) %>% 
+  ungroup() %>% 
+  mutate(cor_p = corcopy_p + corbaf_p,
+         cor_s = corcopy_s + corbaf_s)
+
+loh <- cn %>% 
+  group_by(cell_id) %>% 
+  summarize(loh_5 = sum(LOH == "LOH" & chr == "5") / sum(chr == "5"), loh_9 = sum(LOH == "LOH" & chr == "9") / sum(chr == "9"))
+
+x <- x %>% 
+  left_join(clones) %>% 
+  arrange(desc(corbaf_p)) %>% 
+  select(cell_id, starts_with("cor"), clone_id) %>% 
+  left_join(loh)
+
+plotCNprofile(cn, cellid = x$cell_id[12])
+
+cells <- c("SPECTRUM-OV-022_S1_RIGHT_ADNEXA-A98179A-R23-C46", "SPECTRUM-OV-022_S1_RIGHT_ADNEXA-A98179A-R14-C12")
+
+cfdna_copy <- cfdna_wgs %>% 
+  mutate(cell_id = "x", state = 2) %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), raster = TRUE,
+                    alpha = 0., pointsize = 0.01, cellid = "x", line_size = 0.25, font_size = 7) + ylab('CN') +
+      theme_cowplot(font_size = 7, line_size = 0.25) +
+      theme(legend.position = "none") +
+      scale_y_continuous(breaks = c(0.7, 1.0, 1.3), limits = c(0.65, 1.35))+
+    ylab("Normalized\nRead Counts") 
+
+dlp_cloneA <- cn_clone %>%
+  filter(clone_id == "A") %>% 
+  filter(chr != "Y") %>% 
+  mutate(cell_id = "x", state = 2) %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), raster = TRUE,maxCN = 8,
+                    alpha = 0.3, pointsize = 0.05, cellid = "x", line_size = 0.25, font_size = 7) + ylab('CN') +
+      theme_cowplot(font_size = 7, line_size = 0.25) +
+      theme(legend.position = "none") +
+    ylab("Copy number") 
+
+dlp_cell <- cn %>%
+  filter(cell_id == cells[1]) %>% 
+    filter(chr != "Y") %>% 
+  mutate(cell_id = "x", state = 2) %>% 
+    plotCNprofile(overwrite_color = c("2" = "black"), raster = TRUE,maxCN = 8,
+                    alpha = 0.3, pointsize = 0.05, cellid = "x", line_size = 0.25, font_size = 7) + ylab('CN') +
+      theme_cowplot(font_size = 7, line_size = 0.25) +
+      theme(legend.position = "none") +
+    ylab("Copy number") 
+
+
+plot_grid(dlp_cloneA + ggtitle("Clone A consensus copy number") +  theme(plot.title = element_text(face = "plain")), 
+          dlp_cell + ggtitle(str_remove(cells[1], "SPECTRUM-OV-022_S1_")) +  theme(plot.title = element_text(face = "plain")), 
+          cfdna_copy + ggtitle("cfDNA WGS") +  theme(plot.title = element_text(face = "plain")), 
+          ncol = 1, align = "v", axis = "lr") %>% 
+  save_plot(here("Figures/other/EDF9_validate_frequencies_022.pdf"), 
+          ., base_width = 89 * 0.039, base_height = 3)
+```
