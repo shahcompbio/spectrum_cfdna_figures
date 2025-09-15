@@ -1,0 +1,129 @@
+#data
+tables: "SupplementaryTables.xlsx"
+root: "spectrum_cfdna"
+
+#pilot
+pilot:
+  - "SPECTRUM-OV-003"
+  - "SPECTRUM-OV-065"
+  - "SPECTRUM-OV-068"
+  - "SPECTRUM-OV-044"
+  - "SPECTRUM-OV-026"
+  - "SPECTRUM-OV-014"
+
+patients:
+  - "SPECTRUM-OV-002"
+  - "SPECTRUM-OV-003"
+  - "SPECTRUM-OV-004"
+  - "SPECTRUM-OV-006"
+  - "SPECTRUM-OV-009"
+  - "SPECTRUM-OV-014"
+  - "SPECTRUM-OV-022"
+  - "SPECTRUM-OV-025"
+  - "SPECTRUM-OV-026"
+  - "SPECTRUM-OV-031"
+  - "SPECTRUM-OV-036"
+  - "SPECTRUM-OV-037"
+  - "SPECTRUM-OV-044"
+  - "SPECTRUM-OV-045"
+  - "SPECTRUM-OV-046"
+  - "SPECTRUM-OV-051"
+  - "SPECTRUM-OV-065"
+  - "SPECTRUM-OV-068"
+  - "SPECTRUM-OV-075"
+  - "SPECTRUM-OV-081"
+  - "SPECTRUM-OV-083"
+  - "SPECTRUM-OV-107"
+  - "SPECTRUM-OV-129"
+  - "SPECTRUM-OV-139"
+  
+patients_timeline:
+  - "SPECTRUM-OV-002"
+  - "SPECTRUM-OV-004"
+  - "SPECTRUM-OV-006"
+  - "SPECTRUM-OV-009"
+  - "SPECTRUM-OV-014"
+  - "SPECTRUM-OV-022"
+  - "SPECTRUM-OV-026"
+  - "SPECTRUM-OV-037"
+  - "SPECTRUM-OV-044"
+  - "SPECTRUM-OV-045"
+  - "SPECTRUM-OV-046"
+  - "SPECTRUM-OV-051"
+  - "SPECTRUM-OV-075"
+  - "SPECTRUM-OV-081"
+  - "SPECTRUM-OV-083"
+  - "SPECTRUM-OV-107"
+  - "SPECTRUM-OV-129"
+  - "SPECTRUM-OV-139"
+
+patient_wgs:
+  - "SPECTRUM-OV-044_19-261-05736_8038039630"
+  - "SPECTRUM-OV-009_19-106-04824_8036737607"
+  - "SPECTRUM-OV-045_19-267-04305_8038039364"
+  - "SPECTRUM-OV-022_21-211-04258_8048305213"
+  - "SPECTRUM-OV-045_21-277-02741_8051355334"
+  - "SPECTRUM-OV-044_21-173-00824_8042764095"
+  - "SPECTRUM-OV-081_20-160-04497_8040436629"
+  - "SPECTRUM-OV-107_20-281-03283_8040438278"
+  - "SPECTRUM-OV-081_23-094-02837_8058460167"
+  - "SPECTRUM-OV-107_22-269-03327_8056426976"
+  - "SPECTRUM-OV-022_19-155-02284_8036736012"
+  - "SPECTRUM-OV-009_23-123-02615_8058459178"
+
+#plotting
+font_size: 7
+
+default_plot_size:
+  width: 6.942
+  height: 10
+
+cfdnamd: "/data1/shahs3/users/william1/projects/ctdna/smk_pipeline/metadata/samplesheet.csv"
+
+clonecols:
+  - "#bd3106"
+  - "#e9a00e"
+  - "#5b7314"
+  - "#89a6bb"
+  - "#454b87"
+  - "#d9700e"
+  - "#eebe04"
+  - "#c3d6ce"
+  
+consensus_signature_cols:
+  HRD-Dup: "#5890c0"
+  HRD-Del: "#62a766"
+  HRD: "#4ac4b9"
+  FBI: "#833216"
+  TD: "#d1352d"
+  Undetermined: "#7f7f7f" # grey50
+  NA: "#cccccc"
+
+treatment_colors:  
+  Alive: "yellowgreen"
+  Deceased:  "black"
+  "Anti Angiogenic": "mediumpurple3"
+  Chemotherapy: "darkorange1"
+  Immunotherapy: "goldenrod2"
+  Other: "mediumblue"
+  PARPi: "mediumseagreen"
+  "T-DXd": "deepskyblue3"
+  "MIRV": "mediumblue"
+  
+mutation_colors:
+  DEL: "#374b88"
+  AMP: "#c83934"
+  MUT: "#adadaa"
+  SNP: "#008000"
+  INS: "pink"
+  ONP: "white"
+  DNP: "white"
+  HOMDEL: "#374b88"
+  Germline: "white"
+  Somatic: "black"
+  Fusion: "#6e3171"
+  Unknown: "grey"
+  Missense_Mutation: "#6a9492"
+  Truncating_Mutation: "#724b86"
+  In_Frame_Mutation: "#b3653a"
+

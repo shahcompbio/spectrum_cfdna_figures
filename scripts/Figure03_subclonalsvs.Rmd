@@ -1,0 +1,325 @@
+---
+title: "Figure 3"
+author: "Marc J Williams"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: kable
+    number_sections: yes
+    toc: no
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(here)
+source(here("src/setup.R"))
+source(here("src/copynumber_profile_plots.R"))
+
+library(ggtree)
+plot_clone_tree <- function(tree,
+                            clones,
+                            cols = config$clonecols, 
+                            treesize = 0.5, 
+                            alpha = 1.0,
+                            singlecellsize = 0.5, 
+                            phylopointsize = 3.0){
+  
+  
+  tiplabdf <- data.frame(cell_id = unique(tree$tip.label)) %>% 
+    left_join(clones %>% select(cell_id, clone_id)) %>% 
+    mutate(tiplab = clone_id) %>% 
+    mutate(tiplabsize = 1)
+  
+  treeplot <- ggtree::ggtree(tree, size = treesize, alpha = alpha)
+  
+  treeplot <- treeplot %<+% tiplabdf +geom_tippoint(aes(color=clone_id, size = tiplabsize), shape = 16) +
+    scale_color_manual(values = cols, ) +
+    scale_size(range = c(0,singlecellsize), guide = "none") +
+    #theme(legend.position = "none") +
+    labs(color = "Clone") +
+    ggplot2::guides(colour = ggplot2::guide_legend(
+        ncol = 10, byrow = TRUE,
+        override.aes = list(alpha = 1, size = 1, shape = 15)
+      )) +
+    theme(legend.position = "bottom") +
+    theme(legend.title=element_text(size=8), 
+      legend.text=element_text(size=7)) +
+    NULL
+  
+  return(treeplot)
+}
+
+svaxis <- scale_y_continuous(breaks = 1.0, labels = 'SV', name = NULL)
+
+create_tree_cn_svplot <- function(mysample = "045", 
+                                  filt_chroms = c("9", "19"), 
+                                  filt_clones = c("A", "E"),
+                                  maxCN = 25,
+                                  raster = TRUE) {
+  
+  cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+    mutate(cell_id = clone_id) %>% 
+    filter(mappability > 0.99)
+  clones <- read_allfiles(pattern = "clones.csv", mysample)
+
+  svs <- svs_md %>% 
+    filter(str_detect(patient, mysample)) %>% 
+    filter(clone_id != "Clonal") %>% 
+    mutate(VAF = 1)
+  
+  tree <- ape::read.tree(find_allfiles(config$root, pattern = "newick", patient = mysample))
+  
+  treeplot <- plot_clone_tree(tree, clones,
+                              treesize = 0.01,
+                              cols = cp,  
+                              singlecellsize = 0.01, alpha = 0.1) + 
+      ggtitle(mysample) + 
+      theme(plot.title = element_text(size = 8))
+  
+  cn_sv_plots <- sv_plot_clone(hscn = cn_10kb[mappability > 0.99], 
+                               clustering = clones, svline_size = 0.02,
+                         pointsize = pointsizefunc(sum(hg19_chrlength[filt_chroms]) / 1e6), 
+                         svwidth = 0.1,svalpha = 0.3, 
+                         raster = raster,
+                         svs = svs, 
+                         maxCN = maxCN, font_size = 7,
+                         chrfilt = filt_chroms)
+  
+  sv_vaf1 <- sv_cfdna %>% 
+    filter(str_detect(patient, mysample)) %>% 
+    filter(clone_id %in% filt_clones) %>% 
+    #filter(VAF > 0) %>% 
+    ggplot(aes(x = clone_id, y = VAF, fill = clone_id, col = clone_id)) +
+    geom_violin(scale = "width",  alpha = 0.4, size = 0.2) +
+    geom_point(position = position_jitterdodge(dodge.width = 0.9), 
+              size = 0.1, alpha = 0.8,) +
+    #geom_boxplot(col = "white", position = position_dodge(0.9), width = 0.25, outlier.shape = NA, linewidth = 0.25) +
+    stat_summary(fun = "mean",
+                  geom = "crossbar", 
+                  width = 0.5, 
+                  size = 0.1,
+                  col = "black") +
+    logyscale() + 
+    xlab("Clone") +
+    ylab("cfDNA VAF") +
+    theme(legend.position = "none") +
+    scale_color_manual(values = cp) +
+    scale_fill_manual(values = cp)
+  
+  sv_vaf2 <- sv_cfdna %>% 
+    filter(str_detect(patient, mysample)) %>% 
+    filter(clone_id %in% filt_clones) %>% 
+    group_by(clone_id) %>% 
+    summarise(nsv = n()) %>% 
+    ggplot(aes(x = clone_id, y = nsv, fill = clone_id, col = clone_id)) +
+    geom_col(width = 0.4) +
+    scale_color_manual(values = cp) +
+    scale_fill_manual(values = cp) +
+    theme(legend.position = "none") +
+    ylab("# SVs") +
+    xlab("") +
+    removexaxis
+  
+  dlp_ccf <- clones %>% 
+    group_by(clone_id) %>% 
+    summarise(n = n()) %>% 
+    mutate(n = n / sum(n)) %>% 
+    filter(clone_id %in% filt_clones) %>% 
+    ggplot(aes(x = clone_id, y = n, fill = clone_id, col = clone_id)) +
+    geom_col(width = 0.4) +
+    scale_color_manual(values = cp) +
+    scale_fill_manual(values = cp) +
+    theme(legend.position = "none") +
+    ylab("scWGS CCF") +
+    xlab("") +
+    removexaxis
+    
+  
+  sv_vaf <- plot_grid(NULL,
+                      dlp_ccf,
+                      NULL,
+                      sv_vaf2, 
+                      NULL,
+                      sv_vaf1, 
+                      NULL,
+                      ncol = 1,
+                      rel_heights = c(0.1, 1, -0.4, 1, -0.4, 1.5, 0.1),
+                      axis = "lrtb", 
+                      align = "hv")
+  
+  cnplot <- plot_grid(cn_sv_plots$plotlistsv[[filt_clones[1]]] + removexaxis + svaxis  + theme(legend.position = "none"), 
+                      NULL,
+                      cn_sv_plots$plotlist[[filt_clones[1]]] + ggtitle(NULL) + removexaxis + ylab("CN"), 
+                      NULL,
+                      cn_sv_plots$plotlistsv[[filt_clones[2]]] + removexaxis  + svaxis + theme(legend.position = "none"), 
+                      NULL,
+                      cn_sv_plots$plotlist[[filt_clones[2]]] + ggtitle(NULL)  + ylab("CN"),
+                      ncol = 1,
+                rel_heights = c(0.5, -0.4, 1, -0.2, 0.5, -0.4, 1),
+                align = "hv", axis = "tblr")
+  cnplot
+  finalplot <- plot_grid(treeplot  + theme(legend.position = "none") + ggtitle(NULL), 
+                        cnplot,
+                        sv_vaf, ncol = 3, rel_widths = c(0.7,1, 0.5))
+  return(list(finalplot = finalplot, cnplot = cnplot, cn_sv_plots = cn_sv_plots, treeplot = treeplot, sv_vaf = sv_vaf))
+}
+```
+
+## Summary
+
+```{r, fig.width = 10}
+mycols <- c("#0081A7", "#A24936", "#EFEFD0", "#600047")
+```
+
+```{r}
+symnum.args <- list(cutpoints = c( 0.00, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", "ns"))
+
+tp53_dat <- purity %>%
+  filter(timepoint == 1) %>% 
+  filter(!str_detect(patient, "065|051")) %>% 
+  mutate(tumorfraction_TP53 = ifelse(is.na(tumorfraction_TP53) | tumorfraction_TP53 == 0, tumorfraction_ClonalSV, tumorfraction_TP53)) %>% 
+  mutate(tumorfraction_TP53 = tumorfraction_ClonalSV) %>% 
+  mutate(ptid = str_remove(patient, "SPECTRUM-OV-")) 
+
+(svclonality_flip <- svs %>% 
+  filter(!str_detect(patient, "065|051")) %>% 
+  filter(bamtype == "uncollapsed") %>% 
+  filter(VAF.background == 0.0) %>% 
+  group_by(patient) %>% 
+  filter(timepoint == 1) %>% 
+  mutate(x = clonality) %>% 
+  filter(!is.na(clonality)) %>% 
+  mutate(x = factor(x, levels = c("SubClonal", "Clonal"))) %>% 
+  mutate(ptid = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  ggplot(aes(x = ptid, y = VAF, fill = x, col = x)) +
+  geom_violin(scale = "width",  alpha = 0.4, size = 0.2) +
+  #geom_point(position = position_jitterdodge(dodge.width = 0.9), size = 0.02, alpha = 0.8,) +
+  #geom_point(data = tp53_dat, aes(y = tumorfraction_TP53, fill = NULL, col = NULL), pointstyle = 4) +
+  geom_boxplot(col = "white", position = position_dodge(0.9), linewidth = 0.1, width = 0.25, outlier.shape = NA, alpha = 0.75) +
+  # stat_summary(fun = "mean",
+  #              position = position_dodge(width = 0.9),
+  #           geom = "crossbar", 
+  #           width = 0.5, 
+  #           size = 0.1,
+  #           col = "black") +
+  scale_y_continuous(trans = scales::pseudo_log_trans(sigma = 0.0001, base = 10), 
+                                     breaks = c(0.0, 0.001, 0.01, 0.1, 1L),
+                                     labels = scales::trans_format("log10", scales::math_format(10^.x)),
+                                     limits = c(0, 1.0)) +
+  scale_color_manual(values = mycols[c(2, 1)]) +
+  scale_fill_manual(values = mycols[c(2, 1)]) +
+  stat_compare_means(label.y.npc = 0.95,
+  aes(label = paste0(..p.signif..)), size = 2, symnum.args = symnum.args,
+  ) +
+  theme(legend.title = element_blank(), legend.position = "bottom") +
+  coord_flip() +
+  xlab(""))
+
+gpurity_flip <- purity %>%
+  filter(timepoint == 1) %>% 
+  filter(!str_detect(patient, "065|051")) %>% 
+  mutate(tumorfraction_TP53 = ifelse(is.na(tumorfraction_TP53) | tumorfraction_TP53 == 0, tumorfraction_ClonalSV, tumorfraction_TP53)) %>% 
+  mutate(ptid = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  ggplot(aes(x = ptid, y = tumorfraction_TP53)) +
+  geom_col(fill = "grey60", width = 0.55) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(sigma = 0.0001, base = 10),
+                                   limits = c(0, 1L),
+                                   breaks = c(0.0, 0.001, 0.01, 0.1, 1L),
+                                   labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  #theme_cowplot(font_size = 8, line_size = 0.25) +
+  ylab("Tumor Fraction") +
+  coord_flip() +
+  NULL
+
+plot_grid(svclonality_flip, 
+          gpurity_flip, align = "hv", axis = "lr", ncol = 2)
+```
+
+## Example CN sv profiles
+
+### Setup
+
+```{r}
+pointsizefunc <- function(w){
+  0.001 * 250 / w
+}
+
+cp <- config$clonecols
+names(cp) <- LETTERS[1:length(cp)]
+```
+
+```{r}
+sv_cfdna <- svs %>% 
+  filter(total_counts > 100) %>% 
+  filter(timepoint == 1) %>% 
+  filter(bamtype %in% c("uncollapsed")) %>% 
+  group_by(patient, target_idx, type, rearrangement_type, clone_id, chromosome_1, chromosome_2) %>% 
+  summarize(alt_counts = sum(alt_seq_reads + alt_span_reads), total_counts = sum(total_counts)) %>% 
+  ungroup() %>% 
+  mutate(VAF = alt_counts / total_counts)
+
+```
+
+```{r}
+
+plot083 <- create_tree_cn_svplot(mysample = "083",
+                      filt_chroms = c("1", "8"),
+                      filt_clones = c("A", "B"), maxCN = 15)
+
+plot045 <- create_tree_cn_svplot(mysample = "045",
+                      filt_chroms = c("9", "19"),
+                      filt_clones = c("A", "C"),
+                      maxCN = 12)
+
+plot081 <- create_tree_cn_svplot(mysample = "081",
+                      filt_chroms = c("16"),
+                      filt_clones = c("A", "C"),
+                      maxCN = 12)
+
+plot002 <- create_tree_cn_svplot(mysample = "002",
+                      filt_chroms = c("17", "19"),
+                      filt_clones = c("A", "B"))
+```
+
+
+```{r}
+cnleg <- get_legend(plot045$treeplot)
+svleg <- get_legend(plot002$cn_sv_plots$plotlistsv[[1]] + theme(legend.position = "bottom") + guides(color = guide_legend(nrow = 1, byrow = TRUE, title = "SV", override.aes = list(size = 2, alpha = 1.0))))
+
+plotleg <- plot_grid(NULL, cnleg,NULL, svleg,  ncol = 4, rel_widths = c(0.2, 1,-0.2, 1))
+
+
+gtop <- plot_grid(plot083$finalplot, plot045$finalplot, 
+                  plot081$finalplot, plot002$finalplot, 
+                  ncol = 2, 
+                  labels = c("a  083", "b  045", "c  081", "d  002"), 
+                  label_size = 8,
+                  rel_heights = c(1,1,1,1))
+
+gtop <- plot_grid(gtop,NULL, plotleg, NULL, ncol = 1, rel_heights = c(1,0.03, 0.075, 0.03))
+
+gright <- plot_grid(
+            svclonality_flip,
+            NULL,
+            ncol = 1,
+            rel_heights = c(1,0.065),
+            labels = c("e"),
+            label_size = 8)
+
+gall <- plot_grid(gtop, gright, ncol = 2, rel_widths = c(2,0.5))
+
+save_plot( here("Figures/Fig3_subclonalsvs.pdf"), 
+          gall, base_width = 2 * 89 * 0.039, base_height = 4.5)
+```
+
+
+```{r, fig.width = 7, fig.height = 7}
+gall
+
+```

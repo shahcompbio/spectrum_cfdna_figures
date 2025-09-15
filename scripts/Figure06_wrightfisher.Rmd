@@ -1,0 +1,318 @@
+---
+title: "Figure 6"
+author: "Marc J Williams"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: kable
+    number_sections: yes
+    toc: no
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(here)
+source(here("src/setup.R"))
+#source(here("src/cfdna_utils.R"))
+source(here("src/cfdna_simulations_wf.R"))
+clonecols <- config$clonecols
+names(clonecols) <- LETTERS[1:length(clonecols)]
+```
+
+## Read in data
+
+```{r}
+svdf_clone <- readxl::read_xlsx(config$tables, sheet = "S3 - Clone frequencies (SVs)") %>% 
+  mutate(nclones = 1) %>% 
+  left_join(purity %>% select(patient, timepoint, tumorfraction_ClonalSV))
+ca125 <- readxl::read_xlsx(config$tables, sheet = "S13 - CA125")
+surgeries <- readxl::read_xlsx(config$tables, sheet = "S14 - surgeries") %>% 
+  mutate(surgery_date = as.numeric(surgery_date)) %>% 
+  rename(patient = patient_id)
+
+first_debulking <- surgeries %>% filter(surgery_type != "Laparoscopic Biopsy") %>% group_by(patient) %>% filter(row_number() == 1)
+
+svdf_clone <- svdf_clone %>% 
+  left_join(first_debulking) %>% 
+  mutate(present_post_debulking = clone_frequency > 0 & days > surgery_date & timepoint != 1) %>% 
+  mutate(clone_frequency = ifelse(tumorfraction_ClonalSV < 0.0001, 0, clone_frequency)) %>% 
+  mutate(clone_frequency_normalized = ifelse(tumorfraction_ClonalSV < 0.0001, 0, clone_frequency_normalized)) %>% 
+  rename(cloneVAF = clone_frequency_normalized, purity = tumorfraction_ClonalSV)
+```
+
+## Example
+
+Simulate some data to illustrate the concept.
+
+```{r}
+Nstart <- 10^9
+Nmrd <- 10^4
+
+pop1 <- data.frame(days = seq(0, 200, 1)) %>% 
+  mutate(population = Nstart * exp(-0.058 * days))
+
+pop2 <- data.frame(days = seq(201, 800, 1)) %>% 
+  mutate(population = Nmrd)
+
+pop3 <- data.frame(days = seq(801, 1000, 1)) %>% 
+  mutate(population = Nmrd * exp(0.058 * (days - 801)))
+
+pop <- bind_rows(pop1, pop2, pop3)
+
+# Parameters
+G <- nrow(pop)  # Number of generations
+p_vector <- c(0.5, 0.35, 0.15)  # Initial allele frequencies for each population
+P <- length(p_vector)   # Number of populations
+
+#create a vector of population sizes
+N_vector <- pop$population
+
+sim_df <- data.frame()
+for (x in 1:1000){
+  allele_freq_df <- wright_fisher_dynamic(P, G, p_vector, N_vector, pop$days, clones = LETTERS[1:3])
+  sim_df <- bind_rows(sim_df, allele_freq_df %>% mutate(Nsim = x))
+}
+
+
+g_start <- data.frame(frequency = p_vector, clone = LETTERS[1:3]) %>% 
+  ggplot(aes(x = clone,  y = frequency, fill = clone)) +
+  geom_col(width = 0.2) +
+  scale_fill_manual(values = clonecols) +
+  theme(legend.position = "none") +
+  #ggtitle("Observed frequency (t = 0)") +
+  ylab(NULL) +
+  theme(plot.title = element_text(size = 8, face = "plain")) +
+  ylim(c(0, 0.75)) + 
+  xlab("")
+
+
+g_sim <- sim_df %>% 
+  filter(Nsim <= 100) %>% 
+  #filter(Nsim == 2) %>% 
+  mutate(gr = paste0(clone, Nsim)) %>% 
+  ggplot(aes(x = days, y = frequency, fill = clone, col = clone, group = gr)) +
+  geom_line(alpha = 0.1, linewidth = 0.2) +
+  scale_fill_manual(values = clonecols)  +
+  scale_color_manual(values = clonecols) +
+  theme(legend.position = "none") +
+  ylab("Frequency") +
+  xlab("Days")
+
+g_pop <- pop %>% 
+  ggplot(aes(x = days,  y = population)) + 
+  geom_line() +
+  scale_y_continuous(labels = scales::trans_format("log10", scales::math_format(10^.x)),
+                     breaks = c(10^4, 10^9)) +
+  #removexaxis +
+  xlab("Days") +
+  ylab("Population")
+
+g_dist <- sim_df %>% 
+  filter(days == max(days)) %>% 
+  ggplot(aes(x = frequency, fill = clone, col = clone)) +
+  geom_histogram(alpha = 0.5, size = 0.5)  +
+  geom_vline(data = data.frame(frequency = c(0.1, 0.7, 0.3), clone = LETTERS[1:3]), aes(xintercept = frequency, col = clone, fill = clone)) +
+  facet_wrap(~clone, ncol = 3, scales = "free") +
+  scale_color_manual(values = clonecols) +
+  scale_fill_manual(values = clonecols) +
+  theme(strip.background = element_blank())  +
+  theme(legend.position = "none") +
+  scale_x_continuous(guide = guide_axis(angle = 45)) +
+  ylab("") +
+  removeyaxis +
+  xlab("Clone frequency")
+
+g_end <- data.frame(frequency = c(0.1, 0.7, 0.3), clone = LETTERS[1:3]) %>% 
+  ggplot(aes(x = clone,  y = frequency, fill = clone)) +
+  geom_col(width = 0.2) +
+  scale_fill_manual(values = clonecols) +
+  theme(legend.position = "none") +
+  #ggtitle("Observed frequency (t = 1000)") +
+  ylab(NULL) +
+  theme(plot.title = element_text(size = 8, face = "plain")) +
+  ylim(c(0, 0.75)) + 
+  xlab("")
+
+mygap <- 0.0
+
+gsummary <- plot_grid(
+plot_grid(g_start, NULL, g_end, g_pop, ncol = 1, rel_heights = c( 1,-0.1, 1, 1)),
+NULL,
+plot_grid(NULL, g_sim, ncol = 1, rel_heights = c(0.1, 1)),
+#plot_grid(NULL, g_end, NULL, ncol = 1, rel_heights = c(mygap, 1, mygap)),
+NULL,
+plot_grid(NULL, g_dist, NULL, ncol = 1, rel_heights = c(0.2, 1, 0.2)),
+ncol = 5, rel_widths = c(0.5, 0.2,1.2, 0.2, 1))
+
+gsummary
+```
+
+## Apply to real data
+
+We simulate a Wright-Fisher model using the clone frequencies at time t=0 as starting conditions, and letting the population change over time assuming it's correlated to CA-125 levels. We assume the starting population size is 10^9 and it falls to 10^4 at the timepoints with lowest CA-125.
+
+```{r, fig.height=2, fig.width = 7}
+mypts <- config$patients_timeline %>% str_remove(., "SPECTRUM-OV-")
+mypts <- mypts[mypts!="037"]
+mypts <- mypts[mypts!="051"]
+sim_pops <- lapply(mypts, sim_pop)
+names(sim_pops) <- mypts
+
+mydf <- sim_pops %>% lapply(., function(x) x$pvals) %>% rbindlist() %>% 
+  select(patient, clone, f_mean, cloneVAF, pval)
+```
+
+Plot the results, including the change in clone frequencies at the first time point versus the last timepoint
+
+```{r, fig.height = 1}
+
+clonevafstart <- svdf_clone %>% 
+  filter(nclones == 1) %>% 
+  filter(purity > 0.0) %>% 
+  arrange(days) %>%
+  group_by(patient) %>% 
+  filter(timepoint == min(timepoint)) %>% 
+  mutate(cloneVAF = cloneVAF / sum(cloneVAF)) %>% 
+  select(patient, clone_id, cloneVAF) %>% 
+  rename(clone = clone_id) %>% 
+  mutate(patient = str_remove(patient, "SPECTRUM-OV-"))
+
+mydf <- inner_join(mydf, clonevafstart, by = c("clone", "patient"), suffix = c(".end", ".start"))
+mydf <- mutate(mydf, clonediff = cloneVAF.end - cloneVAF.start)
+
+(gclonediff <- mydf %>% 
+  ggplot(aes(x = clone, y = clonediff, fill = clone)) +
+  geom_col() +
+  facet_grid(~patient,  scales = "free_x", space = "free", switch = "both") +
+  scale_fill_manual(values = clonecols)  +
+  scale_color_manual(values = clonecols) +
+  theme(strip.background = element_blank(),
+      strip.placement = "outside") +
+    #ylab(expression(Frequency~(t[end]-t[start]))) +
+    ylab(bquote(atop("Frequency",(t[end]-t[start])))) +
+    xlab(""))
+
+gpval <- mydf %>% 
+  ggplot(aes(x = clone, y = 1, fill = log10(pval))) +
+  geom_tile() +
+  #coord_equal() +
+  facet_grid(~patient,  scales = "free_x", space = "free", switch = "both") +
+  scale_y_continuous(labels = "p-value", breaks = 1) + 
+  ylab("") +
+  theme(axis.line.y=element_blank()) +
+  #removeyaxis +
+  scale_fill_gradient(high = "grey80", low = "firebrick4")
+
+gtest <- mydf %>% 
+  mutate(pval = p.adjust(pval)) %>% 
+  mutate(x1 = pval < 0.05) %>% 
+  ggplot(aes(x = clone, y = 1, fill = x1)) +
+  geom_tile() +
+  #coord_equal() +
+  scale_y_continuous(labels = "Neutral", breaks = 1) + 
+  ylab("") +
+  theme(axis.line.y=element_blank()) +
+  facet_grid(~patient,  scales = "free_x", space = "free", switch = "both") +
+  #removeyaxis + 
+  scale_fill_manual(values = c("grey70", "deepskyblue4"))
+
+removefacet <- theme(
+  strip.background = element_blank(),
+  strip.text.x = element_blank()
+)
+
+(clone_presence <- svdf_clone %>% 
+  group_by(patient, clone_id) %>% 
+  summarise(present = any(present_post_debulking)) %>% 
+  ungroup() %>% 
+  replace_na(list(present = TRUE)) %>% 
+  mutate(patient = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  filter(patient %in% mydf$patient) %>% 
+  ggplot(aes(x = clone_id, y = 1, fill = present)) +
+  geom_tile() +
+  scale_y_continuous(labels = "Present", breaks = 1) + 
+  ylab("") +
+  theme(axis.line.y=element_blank()) +
+  facet_grid(~patient,  scales = "free_x", space = "free", switch = "both") +
+  #removeyaxis + 
+  scale_fill_manual(values = c("grey70", "deepskyblue4")))
+
+svdf_clone %>% 
+  #filter(timepoint == 1) %>% 
+  group_by(patient, clone_id) %>% 
+  summarise(present = any(cloneVAF > 0)) %>% 
+  ungroup() %>% 
+  mutate(patient = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  filter(patient %in% mydf$patient) %>% 
+  ggplot(aes(x = clone_id, y = 1, fill = present)) +
+  geom_tile() +
+  scale_y_continuous(labels = "Present", breaks = 1) + 
+  ylab("") +
+  theme(axis.line.y=element_blank()) +
+  facet_grid(~patient,  scales = "free_x", space = "free", switch = "both") +
+  #removeyaxis + 
+  scale_fill_manual(values = c("grey70", "deepskyblue4"))
+
+
+
+gwf <- plot_grid(gpval + removexaxis + removefacet,
+                 NULL,
+          gtest + removexaxis + removefacet,
+          NULL,
+          clone_presence + removexaxis + removefacet,
+          NULL,
+          gclonediff + theme(legend.position = "none") ,
+          NULL,
+          ncol = 1, align = "v", axis = "lr",
+          rel_heights = c(1,-0.1,1,-0.1,1,-0.1,3.5, 0.2))
+```
+
+## Final figure
+
+```{r}
+
+format_title <- theme(plot.title = element_text(size = 7, face = "plain"))
+
+gtop <- plot_grid(NULL,
+                     sim_pops[["009"]]$plotlist[[3]] + theme(legend.position = "none") + ylab("Frequency") + ggtitle("009") + format_title, 
+                     sim_pops[["006"]]$plotlist[[3]] + theme(legend.position = "none") + ylab("Frequency")  + ggtitle("006") + format_title,
+                     sim_pops[["045"]]$plotlist[[3]] + theme(legend.position = "none") + ylab("Frequency")  + ggtitle("045") + format_title,
+                     NULL,
+                     ncol = 5, 
+                     rel_widths = c(2,1,1,1, 0.3), labels = c("", "b"), label_size = 8)
+
+plot_grid(gtop,
+          NULL,
+          gwf, 
+          ncol = 1, 
+          rel_heights = c(0.7, 0.1, 1.2),
+          labels = c( "",  "", "c"),
+          label_size = 7)  %>% 
+  save_plot(here("Figures/Fig6_wrightfisher.pdf"), 
+          ., base_width = 2 * 89 * 0.039, base_height =3)
+  
+```
+
+```{r, fig.height=3, fig.width = 7}
+plot_grid(gtop,
+          NULL,
+          gwf, 
+          ncol = 1, 
+          rel_heights = c(0.7, 0.1, 1.2),
+          labels = c( "",  "", "c"),
+          label_size = 7)
+
+```
+
+
+```{r}
+gsummary %>% 
+  save_plot(here("Figures/Fig6_wrightfisher_schematic.pdf"), 
+          ., base_width = 2 * 89 * 0.039, base_height =0.29*6.8)
+
+```

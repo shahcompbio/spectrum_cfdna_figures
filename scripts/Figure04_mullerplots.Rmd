@@ -1,0 +1,814 @@
+---
+title: "Figure 4"
+author: "Marc J Williams"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: kable
+    number_sections: yes
+    toc: no
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Setup
+
+```{r}
+library(here)
+source(here("src/setup.R"))
+source(here("src/clone_trees.R"))
+source(here("src/muller_plots.R"))
+clonecols <- config$clonecols
+names(clonecols) <- LETTERS[1:length(clonecols)]
+```
+
+## Read in data
+
+```{r}
+ctdna_patients <- config$patients
+ctdna_patients <- unlist(lapply(ctdna_patients, function(x) str_remove(x, "SPECTRUM-OV-")))
+
+meta_long <- readxl::read_xlsx(config$tables, sheet = "S11 - clinical data") %>% 
+  mutate(time_from_dx = as.numeric(time_from_dx)) %>% 
+  mutate(Final_tp = as.numeric(Final_tp))
+recurrence <- readxl::read_xlsx(config$tables, sheet = "S12 - recurrence data") %>% 
+  mutate(date = as.numeric(date))
+ca125 <- readxl::read_xlsx(config$tables, sheet = "S13 - CA125")
+surgeries <- readxl::read_xlsx(config$tables, sheet = "S14 - surgeries") %>% 
+  mutate(surgery_date = as.numeric(surgery_date))
+svdf_clone <- readxl::read_xlsx(config$tables, sheet = "S3 - Clone frequencies (SVs)") %>% 
+  mutate(nclones = 1) %>% 
+  left_join(purity %>% select(patient, timepoint, tumorfraction_ClonalSV))
+
+svdf_clone <- svdf_clone %>% 
+  mutate(clone_frequency = ifelse(tumorfraction_ClonalSV < 0.0001, 0, clone_frequency)) %>% 
+  mutate(clone_frequency_normalized = ifelse(tumorfraction_ClonalSV < 0.0001, 0, clone_frequency_normalized))
+
+treatcols <- c("Alive" = "yellowgreen", 
+               "Deceased" = "black", 
+               "Anti Angiogenic" = "mediumpurple3", 
+               "Chemotherapy" = "darkorange1",
+               "Immunotherapy" = "goldenrod2", 
+               "MIRV" = "mediumblue", 
+               "PARPi" = "mediumseagreen", 
+               "T-DXd" = "deepskyblue3")
+```
+
+
+## Plot clone trees
+
+```{r}
+mypts <- config$patients_timeline
+mypts <- unlist(lapply(mypts, function(x) str_remove(x, "SPECTRUM-OV-")))
+mytreeplots <- lapply(mypts, clone_tree_plot)
+names(mytreeplots) <- mypts
+
+plot_grid(plotlist = mytreeplots, ncol = 3, labels = names(mytreeplots), label_size = 7)
+```
+
+## Plot muller plots
+
+Note that for PARPi the records of administration are incomplete, because patients do not need to come to the hospital to recieve treatment. Therefore it looks like there are gaps in the PARPi treatment but actually patients recieve PARPi continuously (with occasional suspension due to illness or other treatments). In the final figures we fill in these gaps manual having confirmed that the start and end dates are correct with clinical colleagues.
+
+For the muller plots, we also force ctDNA and clone frequencies to be 0 if there are long periods of time without cfDNA timepoints and CA-125 levels suggest the absence of detectable tumor DNA.
+
+```{r}
+
+plot_timeline <- function(pts, muller_smooth_cutoff = 1.0, zerotimepoints = NULL, type = "muller2", ...){
+  plot_timeline_newv(pts,  
+                     recurrence %>% filter(recurrence_number == 1),
+                     plotTP53 = F, 
+                     svdf_clone, 
+                     surgeries,  
+                     ca125 = ca125, 
+                     purity = purity, 
+                     meta_long = meta_long, 
+                     treatcols = treatcols, 
+                     gap = gap1, 
+                     gap2 = gap2, 
+                     line_size = 0.1, 
+                     type = type, 
+                     zerotimepoints = zerotimepoints,
+                     muller_smooth_cutoff = muller_smooth_cutoff,
+                    ...)
+}
+
+gap1 <- -0.1
+gap2 <- -0.1
+
+
+plotlist <- list()
+plotlist[["002"]] <- plot_timeline("002")
+plotlist[["004"]] <- plot_timeline("004")
+plotlist[["006"]] <- plot_timeline("006", zerotimepoints = c(150, 375))
+plotlist[["009"]] <- plot_timeline("009", zerotimepoints = c(365, 1095))
+plotlist[["014"]] <- plot_timeline("014", zerotimepoints = c(200, 600), overwritelastT = 750)
+plotlist[["022"]] <- plot_timeline("022", zerotimepoints = c(100, 530))
+plotlist[["026"]] <- plot_timeline("026", zerotimepoints = c(100, 1500), overwritelastT = 2000)
+plotlist[["037"]] <- plot_timeline("037", zerotimepoints = c(100, 365))
+plotlist[["044"]] <- plot_timeline("044",  zerotimepoints = c(150, 500), overwritelastT = T)
+plotlist[["045"]] <- plot_timeline("045")
+plotlist[["046"]] <- plot_timeline("046")
+plotlist[["051"]] <- plot_timeline("051")
+plotlist[["075"]] <- plot_timeline("075", zerotimepoints = c(200, 380), overwritelastT = 500)
+plotlist[["081"]] <- plot_timeline("081", zerotimepoints = c(110, 400))
+plotlist[["083"]] <- plot_timeline("083", zerotimepoints = c(110, 1100))
+plotlist[["107"]] <- plot_timeline("107", zerotimepoints = c(100, 530))
+plotlist[["129"]] <- plot_timeline("129", zerotimepoints = c(100, 530))
+plotlist[["139"]] <- plot_timeline("139", zerotimepoints = c(100, 530))
+
+for (pts in mypts){
+  save_plot(here(glue::glue("Figures/timelines/{pts}_timeline.png")), plotlist[[pts]], base_height = 1.9, base_width = 2/3 * 89 * 0.039)
+}
+
+cowplot::plot_grid(plotlist = plotlist, 
+                   ncol = 5,
+                   labels = names(plotlist),
+                   label_size = 8) %>% 
+  save_plot(here("Figures/timelines/mullerplots_wide.pdf"), 
+          ., base_width = 2.9 * 89 * 0.039, base_height =8)
+
+saveRDS(plotlist, file = here("data/muller_plots.rds"))
+```
+
+## Genetic alterations
+
+Plot some of the clone specific genetic alterations.
+
+```{r}
+source(here("src/utils.R"))
+geneplots <- list()
+
+mydnageneplot <- function(mygene, myylab = NULL, comps = list(c("A", "B"))){
+  symnum.args <- list(cutpoints = c( 0.00, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", "ns"))
+  cp <- config$clonecols
+  names(cp) <- LETTERS[1:length(cp)]
+  
+  if (is.null(myylab)){
+    myylab <- paste0(mygene, " CN")
+  }
+  genedf <- gene_copynumber(cn, mygene) %>% 
+  left_join(clones)
+  
+  genedf %>% 
+      filter(clone_id %in% comps[[1]]) %>% 
+      t.test(copy ~ clone_id, data = .) %>% 
+      print()
+
+  gdna <- genedf %>% 
+      filter(clone_id != "0") %>% 
+      ggplot(aes(x = clone_id, y = copy, fill = clone_id, col = clone_id)) +
+      geom_violin(scale = "width",  alpha = 0.4, size = 0.025) +
+      geom_boxplot(outlier.colour = NA, color = "white", alpha = 0.8, size = 0.1, width = 0.28) +
+      #geom_jitter(height = 0, width = 0.1, size = 0.3, alpha = 0.8) +
+      xlab("") +
+      scale_fill_manual(values = cp) +
+      scale_color_manual(values = cp) +
+      theme(legend.position = "none") +
+      ylab(myylab) +
+      ggpubr::stat_compare_means(label.y.npc = 0.9,
+                                 method = "t.test",
+                                 aes(label = paste0(..p.signif..)), 
+                                 size = 2.5, symnum.args = symnum.args,
+                                 comparisons = comps)
+  return(gdna)
+}
+
+mysample <- "044"
+cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+  filter(mappability > 0.99) %>% 
+  filter(!clone_id %in% c("0", "Pseudobulk"))
+clones <- read_allfiles(pattern = "clones.csv", mysample)
+cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
+clones <- clones %>% filter(clone_id %in% c("B", "E"))
+g044_1 <- mydnageneplot("ERBB2", comps = list(c("B", "E")))
+
+g044_cn <- plotCNprofile(cn_10kb[,cell_id := clone_id], chrstart = 25, chrend = 45,
+                         tickwidth = 10,
+              cellid = "B", 
+              pointsize = 0.4,
+              chrfilt = c("17"),
+              SV = svs_md %>% filter(target_idx == "17_37721055") %>% as.data.frame(),
+              ideogram = F,
+              maxCN = 30,
+              font_size = 7,
+              line_size = 0.25,
+              #annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "ERBB2"),
+              y_axis_trans = "squashy"
+              )
+
+recurrence_patient_044 <- recurrence %>% filter(str_detect(patient_id, "044")) %>% filter(row_number() == 1)
+g044_tra <- svs %>% 
+  filter(target_idx == "target_17_37721055") %>% 
+  filter(bamtype == "uncollapsed") %>% 
+  select(timepoint, alt_counts, alt_seq_reads, days) %>% 
+  arrange(timepoint) %>% 
+  ggplot(aes(x = days, y = alt_seq_reads)) +
+  geom_line(size = 0.5, col = "grey70") +
+  geom_point(size = 0.4) +
+  geom_rect(data = recurrence_patient_044,
+                                 aes(xmin = date, x = NULL, y = NULL, fill = NULL, col = NULL), 
+                                 xmax = Inf, ymin = -Inf, ymax = Inf, 
+                                 fill = "grey60", color = NA, alpha = .2) +
+  scale_x_continuous(breaks = scales::breaks_width(365), guide = guide_axis(angle = 45)) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(sigma = 1, base = 10), breaks = c(0, 10, 30, 100, 500)) +
+  xlab("Days") +
+  ylab("# reads")
+
+geneplots[[paste0(mysample)]] <- mydnageneplot("ERBB2", comps = list(c("B", "E")))
+
+geneplots[[paste0(mysample, "v2")]] <- plot_grid(g044_1 + ylab("ERBB2"), 
+                    NULL,
+                    g044_cn, 
+                    NULL,
+                    ncol = 1, 
+                    align = "v", 
+                    axis = "lr",
+                    rel_heights = c(1, -0.1, 1, -0.3))
+
+mysample <- "107"
+clones <- read_allfiles(pattern = "clones.csv", mysample)
+cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
+g107_3a <- mydnageneplot("NOTCH3", comps = list(c("A", "D")))
+g107_3b <- mydnageneplot("CCNE1", comps = list(c("A", "D")))
+geneplots[[mysample]] <- plot_grid(g107_3a + removexaxis + ylab("NOTCH3"), 
+                    NULL,
+                    g107_3b + ylab("CCNE1"), 
+                    NULL,
+                    ncol = 1, 
+                    align = "v", 
+                    axis = "lr",
+                    rel_heights = c(1, -0.1, 1.3, -0.3))
+
+mysample <- "045"
+clones <- read_allfiles(pattern = "clones.csv", mysample)
+cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
+g045_3 <- mydnageneplot("RAB25", comps = list(c("A", "D")))
+g045_3a <- mydnageneplot("RAB25", comps = list(c("A", "D")))
+g045_3b <- mydnageneplot("CCNE1", comps = list(c("A", "D")))
+
+geneplots[[mysample]] <- plot_grid(g045_3a + removexaxis + ylab("RAB25"), 
+                    NULL,
+                    g045_3b + ylab("CCNE1"), 
+                    NULL,
+                    ncol = 1, 
+                    align = "v", 
+                    axis = "tblr",
+                    rel_heights = c(1, -0.1, 1.3, -0.3))
+
+mysample <- "009"
+library(ggtranscript)
+recurrence_patient <- recurrence %>% filter(str_detect(patient_id, "009"))
+gbrcarev <- svdf_clone %>% 
+  filter(str_detect(patient, "009")) %>% 
+  distinct(timepoint, days) %>% 
+  mutate(nreads = c(rep(0, 10), 1,2,6)) %>% 
+  ggplot(aes(x = days, y = nreads)) +
+  geom_line(size = 0.5, col = "grey70") +
+  geom_point(size = 0.4) +
+  geom_rect(data = recurrence_patient,
+                                 aes(xmin = date, x = NULL, y = NULL, fill = NULL, col = NULL), 
+                                 xmax = Inf, ymin = -Inf, ymax = Inf, 
+                                 fill = "grey60", color = NA, alpha = .2) +
+  scale_x_continuous(breaks = scales::breaks_width(365), guide = guide_axis(angle = 45)) +
+  scale_y_continuous(limits = c(-0.5, 7)) +
+  xlab("Days") +
+  ylab("# reads")
+
+brca1exons <- fread(here("data/BRCA1-exons.csv"))
+brca1exons <- brca1exons %>% 
+  dplyr::rename(seqnames = chr) %>% 
+  mutate(strand = "+", gene_name = "BRCA1", type = "exon") %>% 
+  mutate(transcript_name = "BRCA1") %>% 
+  filter(exon_number %in% c(10, 9))
+
+brca1del <- data.frame(seqnames = "17", start = 41246495, end = 41247865) %>% 
+  mutate(transcript_name = "BRCA1")
+
+example_mutation <- dplyr::tibble(
+  transcript_name = "BRCA1", 
+  position = 41246508
+)
+
+brca1plot <- brca1exons %>%
+    ggplot(aes(
+        xstart = start,
+        xend = end,
+        y = transcript_name
+    )) +
+    geom_range(fill = "deepskyblue3", col = "deepskyblue3") +
+    geom_intron(
+        data = to_intron(brca1exons, "transcript_name"),
+        strand = "-"
+    ) +
+  geom_junction(
+    data = brca1del,
+    junction.y.max = 0.5
+  ) +
+  geom_vline(
+    data = example_mutation, 
+    aes(
+      xintercept = position, 
+      xstart = NULL,
+      xend = NULL
+      ), 
+    linetype = 2,
+    colour = "red"
+  ) +
+  theme_void()
+
+brca1plot <- plot_grid(NULL, brca1plot, NULL, ncol = 1, rel_heights = c(0.2,1,0.2))
+
+geneplots[[mysample]] <- plot_grid(plot_grid(NULL, brca1plot, NULL,  
+                    ncol = 3, 
+                    rel_widths = c(0.4, 1, 0.2), 
+                    labels = c(""), label_size = 8), 
+                    gbrcarev, ncol = 1, rel_heights = c(0.6, 1))
+```
+
+Now plot alterations in patients included in supplementary figures.
+
+```{r}
+geneplots2 <- list()
+geneplots2_10kb <- list()
+
+mysample <- "046"
+clones <- read_allfiles(pattern = "clones.csv", mysample)
+cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
+cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+  filter(mappability > 0.99) %>% 
+  filter(!clone_id %in% c("0", "Pseudobulk")) %>% 
+  mutate(cell_id = clone_id)
+geneplots2[["046-FGFR3"]] <- mydnageneplot("FGFR3",comps = list(c("A", "B")))
+geneplots2[["046-HLA"]] <- mydnageneplot("HLA-A", comps = list(c("A", "B")))
+  
+g1_046 <- plotCNprofile(cn_10kb,chrstart = 0, chrend = 50, tickwidth = 10, ideogram = F, maxCN = 8,
+              cellid = "A", 
+              pointsize = 0.01, raster = T,
+              annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "FGFR3"),
+              chrfilt = "4", 
+              legend.position = "none",
+              font_size = 8, line_size = 0.25)
+g2_046 <- plotCNprofile(cn_10kb,chrstart = 0, chrend = 50, tickwidth = 10, ideogram = F, maxCN = 8,
+              cellid = "B", 
+              pointsize = 0.01, raster = T,
+              annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "FGFR3"),
+              chrfilt = "4", 
+              legend.position = "none",
+              font_size = 8, line_size = 0.25)
+plot_grid(plot_grid(g1_046 + removexaxis + ylab("Clone A CN"), 
+          g2_046 + ylab("Clone B CN"), ncol = 1),
+          geneplots2[["046-FGFR3"]])
+
+mysample <- "022"
+clones <- read_allfiles(pattern = "clones.csv", mysample)
+cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
+cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+  filter(mappability > 0.99) %>% 
+  filter(!clone_id %in% c("0", "Pseudobulk")) %>% 
+  mutate(cell_id = clone_id)
+geneplots2[["022-MYC"]] <- mydnageneplot("MYC", comps = list(c("A", "E")))
+
+g1_022 <- plotCNprofile(cn_10kb,#chrstart = 0, chrend = 50, tickwidth = 10, ideogram = F, maxCN = 8,
+              cellid = "A", 
+              pointsize = 0.01, raster = T,
+              annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "MYC"),
+              chrfilt = "8", 
+              legend.position = "none",
+              font_size = 8, line_size = 0.25)
+g2_022 <- plotCNprofile(cn_10kb,#chrstart = 0, chrend = 50, tickwidth = 10, ideogram = F, maxCN = 8,
+              cellid = "E", 
+              pointsize = 0.01, raster = T,
+              annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "MYC"),
+              chrfilt = "8", 
+              legend.position = "none",
+              font_size = 8, line_size = 0.25)
+
+g4 <- plot_grid(NULL,
+          geneplots2[["046-FGFR3"]], 
+          NULL,
+          geneplots2[["022-MYC"]],
+          NULL, nrow = 1, rel_widths = c(0.1,1,0.4, 1, 0.1))
+
+
+plot_grid(plot_grid(plot_grid(g1_046 + removexaxis + ylab("Clone A CN"), 
+          g2_046 + ylab("Clone B CN"), ncol = 1),
+          plot_grid(plot_grid(g1_022 + removexaxis + ylab("Clone A CN"), 
+          g2_022 + ylab("Clone E CN"), ncol = 1)), 
+          labels = c("046", "022"), label_size = 7),
+          g4, ncol = 1, rel_heights = c(1, 0.6)) %>% 
+  save_plot(plot = ., filename = here("Figures/other/022_046_hlamps.pdf"), base_height = 3, base_width = config$default_plot_size$width / 2)
+
+
+
+mysample <- "083"
+clones <- read_allfiles(pattern = "clones.csv", mysample)
+cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
+cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+  filter(mappability > 0.99) %>% 
+  filter(!clone_id %in% c("0", "Pseudobulk")) %>% 
+  mutate(cell_id = clone_id)
+
+g1_083 <- plotCNprofile(cn_10kb,#chrstart = 0, chrend = 50, tickwidth = 10, ideogram = F, maxCN = 8,
+              cellid = "A", 
+              pointsize = 0.01, raster = T,
+              #annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "MYC"),
+              chrfilt = c("6", "8"), 
+              maxCN = 25,
+              y_axis_trans = "squashy",
+              legend.position = "none",
+              font_size = 8, line_size = 0.25)
+g2_083 <- plotCNprofile(cn_10kb,#chrstart = 0, chrend = 50, tickwidth = 10, ideogram = F, maxCN = 8,
+              cellid = "B", 
+              pointsize = 0.01, raster = T,
+              #annotateregions = gene_locations$hg19 %>% filter(ensembl_gene_symbol == "MYC"),
+              chrfilt = c("6", "8"), 
+               maxCN = 25,
+              y_axis_trans = "squashy",
+              legend.position = "none",
+              font_size = 8, line_size = 0.25)
+
+plot_grid(plot_grid(g1_083 + removexaxis + ylab("Clone A CN"), 
+          g2_083 + ylab("Clone B CN"), ncol = 1))  %>% 
+  save_plot(plot = ., filename = here("Figures/other/083_chromothripsis.pdf"), base_height = 3, base_width = config$default_plot_size$width / 4)
+
+
+```
+
+```{r}
+plotlistmain <- list()
+i <- 1
+for (pts in "044"){
+  print(pts)
+  treeplot <- plot_grid(ggplot() + theme_cowplot(font_size = 7) +
+                          removexaxis + removeyaxis + ggtitle(paste0(letters[i], "   ", pts)), 
+                        mytreeplots[[pts]], NULL, NULL,
+                        ncol = 2, 
+                        rel_widths = c(1,1),
+                        rel_heights = c(1.3,1))
+  plotlistmain[[pts]] <- cowplot::plot_grid(treeplot, 
+                                           plotlist[[pts]], 
+                                           plot_grid(NULL, geneplots[[pts]], NULL, 
+                                                     ncol = 1, rel_heights = c(0.3, 1, 0.3)),
+                                           ncol = 3,
+                                           rel_widths = c(1.2, 1.8, 0.6))
+  i <- i + 1
+}
+
+main_fig_pts <- c("009", "107", "045", "026", "139", "046")
+i <- 1
+for (pts in main_fig_pts){
+  print(pts)
+  treeplot <- plot_grid(ggplot() + theme_cowplot(font_size = 7) +
+                          removexaxis + removeyaxis + ggtitle(paste0(letters[i], "   ", pts)), 
+                        mytreeplots[[pts]], NULL, NULL,
+                        ncol = 2, 
+                        rel_widths = c(1,1),
+                        rel_heights = c(1.3,1))
+  plotlistmain[[pts]] <- cowplot::plot_grid(treeplot, 
+                                           plotlist[[pts]], 
+                                           ncol = 2,
+                                           rel_widths = c(0.5, 1))
+  i <- i + 1
+}
+
+```
+
+
+```{r}
+for_leg <- plot_timeline("009", zerotimepoints = c(365, 1095), plotlist = T)
+leg <- get_legend(for_leg$gclone)
+
+gmuller_main <- plot_grid(plotlistmain[["044"]],
+          NULL,
+          plot_grid(plotlist = plotlistmain[c("009", "107", "045")], ncol = 3),
+          plot_grid(gbrcarev, geneplots[["107"]], geneplots[["045"]], NULL, rel_widths = c(1.33, 0.89, 0.89, 0.89), nrow = 1),
+          plot_grid(plotlist = plotlistmain[c("026", "139", "046")], ncol = 3),
+          NULL,
+          ncol = 1, rel_heights = c(1,0.6,0.8,0.4,0.8, 0.25))
+
+gmuller_main %>% 
+  save_plot(here("Figures/Fig4_mullerplots.pdf"), 
+          ., base_width = 2 * 89 * 0.039, base_height =8)
+```
+
+
+```{r}
+
+mysample <- "044"
+cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>% 
+  mutate(cell_id = clone_id) %>% 
+  filter(mappability > 0.99)%>% 
+    filter(!clone_id %in% c("0", "Pseudobulk"))
+
+g044_cn_17_B <- plotCNprofile(cn_10kb[,cell_id := clone_id], chrstart = 25, chrend = 45,
+                         tickwidth = 10,
+              cellid = "B", 
+              pointsize = 0.1,
+              chrfilt = c("17"),
+              SV = svs_md %>% filter(target_idx == "17_37721055") %>% as.data.frame(),
+              ideogram = F,
+              maxCN = 30,
+              font_size = 7,
+              line_size = 0.25,
+              legend.position = "none",
+              y_axis_trans = "squashy"
+              )
+
+
+g044_cn_2_B <- plotCNprofile(cn_10kb[,cell_id := clone_id], chrstart = 235, chrend = 245,
+                         tickwidth = 5,
+              cellid = "B", 
+              pointsize = 0.1,
+              chrfilt = c("2"),
+              SV = svs_md  %>% filter(target_idx == "17_37721055") %>% as.data.frame(),
+              ideogram = F,
+              maxCN = 30,
+              font_size = 7,
+              line_size = 0.25,
+              legend.position = "none",
+              y_axis_trans = "squashy"
+              )
+
+g044_cn_17_E <- plotCNprofile(cn_10kb[,cell_id := clone_id], chrstart = 25, chrend = 45,
+                         tickwidth = 10,
+              cellid = "E", 
+              pointsize = 0.1,
+              chrfilt = c("17"),
+              SV = svs_md  %>% filter(target_idx == "17_37721055") %>% as.data.frame(),
+              ideogram = F,
+              maxCN = 30,
+              font_size = 7,
+              line_size = 0.25,
+              legend.position = "none",
+              y_axis_trans = "squashy"
+              )
+
+
+g044_cn_2_E <- plotCNprofile(cn_10kb[,cell_id := clone_id], chrstart = 235, chrend = 245,
+                         tickwidth = 5,
+              cellid = "E", 
+              pointsize = 0.1,
+              chrfilt = c("2"),
+              SV = svs_md  %>% filter(target_idx == "17_37721055") %>% as.data.frame(),
+              ideogram = F,
+              maxCN = 30,
+              font_size = 7,
+              line_size = 0.25,
+              legend.position = "none",
+              y_axis_trans = "squashy"
+              )
+
+recurrence_patient_044 <- recurrence %>% filter(str_detect(patient_id, "044")) %>% filter(row_number() == 1)
+g044_tra <- svs %>% 
+  filter(target_idx == "target_17_37721055") %>% 
+  filter(bamtype == "uncollapsed") %>% 
+  select(timepoint, alt_counts, alt_seq_reads, days) %>% 
+  arrange(timepoint) %>% 
+  ggplot(aes(x = days, y = alt_seq_reads)) +
+  geom_line(size = 0.5, col = "grey70") +
+  geom_point(size = 0.4) +
+  geom_rect(data = recurrence_patient_044,
+                                 aes(xmin = date, x = NULL, y = NULL, fill = NULL, col = NULL), 
+                                 xmax = Inf, ymin = -Inf, ymax = Inf, 
+                                 fill = "grey60", color = NA, alpha = .2) +
+  scale_x_continuous(breaks = scales::breaks_width(365), guide = guide_axis(angle = 0)) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(sigma = 4, base = 10), breaks = c(0, 10, 30, 100, 500)) +
+  xlab("Days") +
+  ylab("# reads")
+
+
+plot_grid(NULL,
+          plot_grid(g044_cn_2_B + removexaxis + ylab("B"), NULL, g044_cn_17_B + removexaxis + removeyaxis, ncol = 3, rel_widths = c(1,0.2,2)),
+          NULL,
+          plot_grid(g044_cn_2_E  + ylab("E"), NULL, g044_cn_17_E + removeyaxis, ncol = 3, rel_widths = c(1,0.2,2)),
+          NULL,
+          plot_grid(NULL,g044_tra,NULL, ncol = 3, rel_widths = c(0.1,1,0.1)), 
+          ncol = 1, rel_heights = c(0.1, 1, -0.1,1.2,0.1,1.3)) %>% 
+    save_plot(here("Figures/Fig4_mullerplots_erbb2.pdf"), 
+          ., base_width = 0.25 * 2 * 89 * 0.039, base_height =2.1)
+```
+
+
+```{r}
+plot_grid(plot_grid(brca1plot, gbrcarev),
+          NULL,
+          plot_grid(g107_3a, g107_3b, NULL, ncol = 3),
+          NULL,
+          plot_grid(g045_3a  + scale_y_continuous(breaks = c(0, 5,10), limits = c(0, NA)),  
+                    g045_3b + scale_y_continuous(breaks = c(0, 5,10), limits = c(0, NA)), NULL, ncol = 3), ncol = 5,
+          rel_widths = c(1, 0.1, 1, 0.1, 1)) %>% 
+  save_plot(here("Figures/Fig4_gene_annotations.pdf"), ., base_width = config$default_plot_size$width, base_height = 1)
+
+```
+
+
+## Extended data figure
+
+Create EDF7
+
+```{r}
+
+supp_fig_pts <- c("002", "004", "006", "014", "022", "037", "051", "075", "081", "083", "129")
+
+plotlistsupp <- list()
+i <- 1
+for (pts in supp_fig_pts){
+  print(pts)
+  treeplot <- plot_grid(ggplot() + theme_cowplot(font_size = 7) +
+                          removexaxis + removeyaxis + ggtitle(paste0(letters[i], "   ", pts)), 
+                        mytreeplots[[pts]], NULL, NULL,
+                        ncol = 2, 
+                        rel_widths = c(1,1),
+                        rel_heights = c(1.3,1))
+  plotlistsupp[[pts]] <- cowplot::plot_grid(treeplot, 
+                                           plotlist[[pts]], 
+                                           ncol = 2,
+                                           rel_widths = c(0.5, 1))
+  i <- i + 1
+}
+
+```
+
+
+```{r}
+
+for_diversity <- svdf_clone %>% 
+  left_join(recurrence %>% filter(recurrence_number == 1) %>% rename(patient = patient_id)) %>% 
+  mutate(recurrence = days > date) %>% 
+  group_by(patient, timepoint, days, recurrence) %>% 
+  mutate(maxf = max(clone_frequency)) %>% 
+  ungroup() %>% 
+  filter(patient %in% config$patients_timeline)
+
+for_diversity %>% 
+  filter(tumorfraction_ClonalSV > 0 & maxf > 0) %>% 
+  group_by(patient, timepoint, days, recurrence) %>% 
+  mutate(f= clone_frequency / sum(clone_frequency)) %>% 
+  summarise(ent = entropy::entropy(f), 
+            nclones = sum(clone_frequency > 0),
+            simp = sum(f^2)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = timepoint, y = nclones)) + 
+  geom_point() +
+  geom_line() +
+  facet_wrap(~patient, scales = "free_x")
+
+(gf <- for_diversity %>% 
+  filter(maxf > 0) %>% 
+  group_by(patient, timepoint, days, recurrence) %>% 
+  mutate(f= clone_frequency / sum(clone_frequency)) %>% 
+  ungroup() %>% 
+  select(recurrence, patient, clone_id, timepoint, days, f) %>% 
+  mutate(recurrence = ifelse(str_detect(patient, "004") & timepoint == 9, TRUE, recurrence)) %>% 
+  group_by(patient) %>% 
+  filter(timepoint == 1 | timepoint == max(timepoint)) %>% 
+  ungroup() %>% 
+  mutate(pt = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  ggplot(aes(x = recurrence, y = f, fill = clone_id)) +
+  geom_col(width = 0.8) +
+  scale_fill_manual(values = config$clonecols) +
+  facet_wrap(~pt, nrow = 1, strip.position = "bottom") +
+  scale_x_discrete(labels = c("Baseline", "Recurrence"),
+                   guide = guide_axis(angle = 90)) +
+  theme(strip.background = element_blank(),
+        strip.placement = "outside") +
+  xlab("") +
+  labs(fill = "") +
+  ylab("Clone frequency"))
+
+
+(gnclone<- for_diversity %>% 
+  filter(maxf > 0) %>% 
+  group_by(patient, timepoint, days, recurrence) %>% 
+  mutate(f= sum(clone_frequency > 0)) %>% 
+  ungroup() %>% 
+  select(recurrence, patient, clone_id, timepoint, days, f) %>% 
+  mutate(recurrence = ifelse(str_detect(patient, "004") & timepoint == 9, TRUE, recurrence)) %>% 
+  group_by(patient) %>% 
+  filter(timepoint == 1 | timepoint == max(timepoint)) %>% 
+  ungroup() %>% 
+  mutate(pt = str_remove(patient, "SPECTRUM-OV-")) %>% 
+  select(-clone_id) %>% 
+  distinct() %>% 
+  ggplot(aes(x = recurrence, y = f)) +
+  geom_col(fill = "grey70") +
+  facet_wrap(~pt, nrow = 1, strip.position = "bottom") +
+  scale_x_discrete(labels = c("Baseline", "Recurrence"),
+                   guide = guide_axis(angle = 90)) +
+  theme(strip.background = element_blank(),
+        strip.text.x = element_blank()) +
+  xlab("") +
+  removexaxis +
+  labs(fill = "") +
+  ylab("# Clones\ndetected"))
+
+diversity <- for_diversity %>% 
+  filter(tumor_fraction > 0 & maxf > 0) %>% 
+  #filter(patient != "SPECTRUM-OV-022") %>% 
+  filter(nclones == 1) %>% 
+  mutate(recurrence = ifelse(str_detect(patient, "004") & timepoint == 9, TRUE, recurrence)) %>% 
+  group_by(patient, timepoint, days, recurrence) %>% 
+  mutate(x = clone_frequency / sum(clone_frequency)) %>% 
+  summarise(ent = entropy::entropy(x), 
+            nclones = sum(clone_frequency > 0),
+            simp = sum(clone_frequency^2)) %>% 
+  ungroup() %>% 
+  na.omit() %>% 
+  group_by(patient) %>% 
+  filter(timepoint == 1 | timepoint == max(timepoint)) %>% 
+  mutate(has_recurrence = any(recurrence)) %>% 
+  filter(has_recurrence == TRUE) %>% 
+  ungroup()
+
+gdiv <- diversity %>% 
+  select(patient, recurrence, ent) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = "recurrence", values_from = "ent", names_prefix = "rec_") %>% 
+  ggpaired(., cond1 = "rec_FALSE", 
+           cond2 = "rec_TRUE", 
+           fill = "condition", 
+           width = 0.3,
+           point.size = 0.1,
+           outlier.size = 0.1,
+           line.size = 0.1) +
+  scale_fill_manual(values = c("firebrick3", "deepskyblue4")) +
+  stat_compare_means(method = "t.test", 
+                     label.y.npc = 0.9,  
+                     label = "p.format", 
+                     size = 2,
+                     #method.args = list(alternative = "less"),
+                     label.x.npc = 0.5, 
+                     paired = TRUE) +
+  scale_x_discrete(labels = c("Baseline", "Recurrence"), 
+                   guide = guide_axis(angle = 45)) +
+  xlab("") +
+  ylab("Shannon entropy") +
+  theme_cowplot(font_size = 7, line_size = 0.25) +
+  theme(legend.position = "none")
+gdiv
+
+gnclone_box <- diversity %>% 
+  select(patient, recurrence, nclones) %>% 
+  pivot_wider(names_from = "recurrence", values_from = "nclones", names_prefix = "n_") %>% 
+  ggpaired(., cond1 = "n_FALSE", 
+           cond2 = "n_TRUE", 
+           fill = "condition", 
+           width = 0.3,
+           point.size = 0.1,
+           outlier.size = 0.1,
+           line.size = 0.1) +
+    stat_compare_means(method = "t.test", 
+                     label.y.npc = 0.9,  
+                     size = 2,
+                     #method.args = list(alternative = "less"),
+                     label = "p.format", 
+                     label.x.npc = 0.5, 
+                     paired = TRUE) +
+    scale_fill_manual(values = c("firebrick3", "deepskyblue4")) +
+    scale_x_discrete(labels = c("Baseline", "Recurrence"), 
+                   guide = guide_axis(angle = 45)) +
+    xlab("") +
+    ylab("Number of clones") +
+    theme_cowplot(font_size = 7, line_size = 0.25) +
+    theme(legend.position = "none")
+gnclone_box
+```
+
+
+```{r}
+for_leg <- plot_timeline("009", zerotimepoints = c(365, 1095), plotlist = T)
+leg <- get_legend(for_leg$gclone)
+
+gmuller_supp <- plot_grid(plot_grid(plotlist = plotlistsupp,
+                   #labels = letters[1:10],
+                   label_size = 8, ncol = 3),
+                   leg,
+                   ncol = 1,
+                   rel_heights = c(1, 0.1))
+
+gbottom1 <- cowplot:: plot_grid(gnclone, NULL, gf + ylab("Clone\nfrequency"), ncol = 1, rel_heights = c(0.35,-0.02, 1),
+                    axis = "lr", align = "v")
+gbottom <- plot_grid(gbottom1, gdiv, gnclone_box,
+                     ncol = 3,
+                     rel_widths = c(1, 0.3, 0.3), 
+                     labels = c("l", "m", "n"),
+                     label_size = 8)
+
+gsupp <- plot_grid(gmuller_supp, 
+                   gbottom, ncol = 1,
+                   rel_heights = c(6,2))
+
+gsupp %>% 
+  save_plot(here("Figures/EDF7.pdf"), 
+          ., base_width = 2 * 89 * 0.039, base_height =10)
+
+```
+
+```{r, fig.height=10, fig.width = 7}
+gsupp
+```
