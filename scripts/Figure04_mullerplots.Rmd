@@ -184,7 +184,7 @@ cn_10kb <- read_allfiles(pattern = "_clone_copynumber_10kb.csv", mysample) %>%
   filter(!clone_id %in% c("0", "Pseudobulk"))
 clones <- read_allfiles(pattern = "clones.csv", mysample)
 cn <- read_allfiles(pattern = "hscn.csv.gz", mysample)
-clones <- clones %>% filter(clone_id %in% c("B", "E"))
+clones <- clones
 g044_1 <- mydnageneplot("ERBB2", comps = list(c("B", "E")))
 
 g044_cn <- plotCNprofile(cn_10kb[,cell_id := clone_id], chrstart = 25, chrend = 45,
@@ -811,4 +811,30 @@ gsupp %>%
 
 ```{r, fig.height=10, fig.width = 7}
 gsupp
+```
+
+
+## Truncal SV vaf relative to recurrence
+
+Here we want to pick out the dates and the difference (diff) when we detect ctDNA via SVs prior to the first clinical recurrence. This is just done manually.
+
+```{r}
+purity %>% 
+  left_join(recurrence %>% filter(recurrence_number == 1) %>% rename(patient = patient_id)) %>% 
+  select(patient, sample, timepoint, days, tumorfraction_ClonalSV, recurrence_number, date) %>% 
+  mutate(diff = date - days) %>% 
+  arrange(patient, timepoint)
+
+c(76, #002
+  184, #009
+  117, #022
+  509, #026
+  336, #037
+  109, #045
+  363, #046
+  269, #051
+  173, #075
+  314, #081
+  224 #139
+) %>% mean
 ```
