@@ -1,8 +1,8 @@
 # ctDNA Analysis - Williams et al. Nature
 [![DOI](https://zenodo.org/badge/1013093862.svg)](https://doi.org/10.5281/zenodo.15798215)
 
-This repository contains code for generating results from Williams et al. Nature: **Tracking clonal evolution during treatment
-in ovarian cancer using cell-free DNA** ([Paper Link Placeholder])
+This repository contains code for generating results from Williams et al. Nature: [**Tracking clonal evolution during treatment
+in ovarian cancer using cell-free DNA**](https://www.nature.com/articles/s41586-025-09580-0)
 
 ## Data Requirements
 
@@ -14,7 +14,7 @@ Download the project data from Synapse:
 # Install synapseclient if not already installed
 pip install synapseclient
 
-# Login to Synapse (you'll need to create an account and get access to the project)
+# Login to Synapse
 synapse login
 
 # Download the project data
@@ -22,7 +22,7 @@ synapse get syn66399325 -r
 ```
 
 ### Supplementary Tables
-Download the supplementary tables from the published paper (available from the journal website or supplementary materials).
+Download the supplementary tables from the published paper/
 
 ## Docker Environment
 
